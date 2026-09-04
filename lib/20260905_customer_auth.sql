@@ -1,0 +1,11 @@
+alter table public.customer_orders add column if not exists user_id uuid;
+alter table public.customer_orders add constraint customer_orders_user_id_fkey foreign key (user_id) references auth.users(id) on delete set null;
+alter table public.prescriptions add column if not exists user_id uuid references auth.users(id) on delete set null;
+create index if not exists customer_orders_user_id_idx on public.customer_orders(user_id, created_at desc);
+create index if not exists prescriptions_user_id_idx on public.prescriptions(user_id, created_at desc);
+drop policy if exists customer_orders_select_own on public.customer_orders;
+create policy customer_orders_select_own on public.customer_orders for select to authenticated using (user_id=auth.uid());
+drop policy if exists customer_order_items_select_own on public.customer_order_items;
+create policy customer_order_items_select_own on public.customer_order_items for select to authenticated using (exists(select 1 from public.customer_orders o where o.id=customer_order_items.order_id and o.user_id=auth.uid()));
+drop policy if exists customer_order_events_select_own on public.customer_order_events;
+create policy customer_order_events_select_own on public.customer_order_events for select to authenticated using (exists(select 1 from public.customer_orders o where o.id=customer_order_events.order_id and o.user_id=auth.uid()));
