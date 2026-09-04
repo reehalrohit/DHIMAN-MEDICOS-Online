@@ -58,10 +58,11 @@ export default function AdminDashboard() {
           <Link href="/pos" style={styles.tile}><span>🧾</span><strong>POS Billing</strong><small>Create sales and collect payments</small></Link>
           <Link href="/inventory" style={styles.tile}><span>📦</span><strong>Inventory</strong><small>Manage stock and movements</small></Link>
           <Link href="/sales" style={styles.tile}><span>📊</span><strong>Sales History</strong><small>Invoices, PDF and print</small></Link>
+          <Link href="/admin/orders" style={styles.tile}><span>🛍️</span><strong>Online Orders</strong><small>Review customer orders and fulfilment</small></Link>
           <Link href="/" style={styles.tile}><span>🌐</span><strong>Storefront</strong><small>Open public website</small></Link>
         </div>
 
-        <div style={styles.security}><span>🛡️</span><div><strong>Admin protection enabled</strong><small>POS, inventory and sales APIs require an authenticated approved admin account.</small></div></div>
+        <div style={styles.security}><span>🛡️</span><div><strong>Admin protection enabled</strong><small>POS, inventory, sales and online-order management require an authenticated approved admin account.</small></div></div>
       </section>
     </main>
   );
