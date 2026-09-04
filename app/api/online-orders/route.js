@@ -4,6 +4,7 @@ import { CATALOG } from "../../../lib/medicines";
 import { medicineKey } from "../../../lib/inventory";
 import { supabaseAdmin } from "../../../lib/supabase-admin";
 import { getRazorpayConfig, razorpayRequest } from "../../../lib/razorpay";
+import { createServerClient } from "@supabase/ssr";
 
 export const dynamic = "force-dynamic";
 
@@ -41,6 +42,10 @@ function catalogIndex() {
 export async function POST(request) {
   let orderId = null;
   try {
+    const authResponse = NextResponse.next();
+    const authClient = createServerClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY, { cookies: { getAll(){ return request.cookies.getAll(); }, setAll(cookiesToSet){ cookiesToSet.forEach(({name,value,options})=>authResponse.cookies.set(name,value,options)); } } });
+    const { data: { user } } = await authClient.auth.getUser();
+    if (!user) return NextResponse.json({success:false,error:"Please sign in before placing an online order."},{status:401});
     const body = await request.json();
     const rawItems = Array.isArray(body?.items) ? body.items : [];
     if (rawItems.length < 1 || rawItems.length > 30) return NextResponse.json({ success: false, error: "Cart is empty or too large." }, { status: 400 });
@@ -103,9 +108,9 @@ export async function POST(request) {
     const prescriptionId = body?.prescription_id ? Number(body.prescription_id) : null;
     if (prescriptionRequired) {
       if (!Number.isInteger(prescriptionId) || prescriptionId <= 0) return NextResponse.json({ success: false, error: "A prescription is required for one or more medicines in your cart." }, { status: 400 });
-      const { data: prescription, error: prescriptionError } = await supabaseAdmin.from("prescriptions").select("id,status,order_id").eq("id", prescriptionId).maybeSingle();
+      const { data: prescription, error: prescriptionError } = await supabaseAdmin.from("prescriptions").select("id,status,order_id,user_id").eq("id", prescriptionId).maybeSingle();
       if (prescriptionError) throw prescriptionError;
-      if (!prescription || prescription.order_id || prescription.status === "rejected") return NextResponse.json({ success: false, error: "The uploaded prescription cannot be used for this order." }, { status: 400 });
+      if (!prescription || prescription.order_id || prescription.user_id !== user.id || prescription.status === "rejected") return NextResponse.json({ success: false, error: "The uploaded prescription cannot be used for this order." }, { status: 400 });
     }
 
     subtotal = Math.round(subtotal * 100) / 100;
@@ -113,7 +118,7 @@ export async function POST(request) {
     const orderNumber = `DMO-${new Date().toISOString().slice(0, 10).replaceAll("-", "")}-${randomUUID().slice(0, 6).toUpperCase()}`;
     const trackingToken = randomUUID();
     const { data: order, error: orderError } = await supabaseAdmin.from("customer_orders").insert({
-      order_number: orderNumber, tracking_token: trackingToken, customer_name: customerName, customer_phone: customerPhone, customer_email: customerEmail,
+      order_number: orderNumber, tracking_token: trackingToken, user_id: user.id, customer_name: customerName, customer_phone: customerPhone, customer_email: customerEmail,
       address_line1: addressLine1, address_line2: addressLine2, landmark, city, state, pincode, delivery_method: deliveryMethod,
       notes: normalize(body?.notes, 500) || null, subtotal, discount: 0, delivery_fee: 0, total, payment_method: paymentMethod,
       payment_status: "pending", order_status: "pending_review", prescription_status: prescriptionRequired ? "pending" : "not_required", prescription_id: prescriptionRequired ? prescriptionId : null,
