@@ -1,0 +1,120 @@
+name: Update Medicine Catalog
+
+on:
+  push:
+    paths:
+      - "invoices/**"
+  workflow_dispatch:
+
+# Only one catalog update is allowed to run at a time. This prevents two
+# invoice-processing runs from racing against each other on main.
+concurrency:
+  group: update-medicines-main
+  cancel-in-progress: false
+
+jobs:
+  update-catalog:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.BOT_TOKEN || secrets.GITHUB_TOKEN }}
+
+      # Start from the newest main before touching any generated files.
+      - name: Sync with main
+        run: |
+          git config user.name "Dhiman Medicos Bot"
+          git config user.email "reehalrohit@users.noreply.github.com"
+          git fetch origin main
+          git reset --hard origin/main
+
+      - name: Check for CSV files
+        id: check
+        run: |
+          COUNT=$(find invoices -type f \( -name "*.csv" -o -name "*.CSV" \) 2>/dev/null | wc -l)
+          echo "csv_count=$COUNT" >> "$GITHUB_OUTPUT"
+          echo "Found $COUNT CSV file(s)"
+
+      - name: Verify Supabase secrets
+        if: steps.check.outputs.csv_count != '0'
+        run: |
+          if [ -z "$SUPABASE_URL" ]; then
+            echo "❌ SUPABASE_URL secret is missing"
+            exit 1
+          fi
+
+          if [ -z "$SUPABASE_SERVICE_ROLE_KEY" ]; then
+            echo "❌ SUPABASE_SERVICE_ROLE_KEY secret is missing"
+            exit 1
+          fi
+
+          echo "✓ Supabase secrets are configured"
+
+      - name: Process invoice CSVs
+        if: steps.check.outputs.csv_count != '0'
+        run: python3 .github/scripts/process-invoice.py
+
+      - name: Cleanup duplicates
+        if: steps.check.outputs.csv_count != '0'
+        run: python3 .github/scripts/cleanup_duplicates.py
+
+      - name: Validate catalog
+        if: steps.check.outputs.csv_count != '0'
+        run: python3 .github/scripts/validate_catalog.py
+
+      - name: Verify JS syntax
+        if: steps.check.outputs.csv_count != '0'
+        run: node --check lib/medicines.js
+
+      # Never stage duplicates-report.txt. It is a generated diagnostic file
+      # and has previously caused modify/delete rebase conflicts.
+      - name: Remove generated duplicate report
+        if: steps.check.outputs.csv_count != '0'
+        run: rm -f duplicates-report.txt
+
+      # Do not rebase after changing medicines.js. A remote change during the
+      # processing window would otherwise create a merge conflict. The check
+      # below fails safely; the next run is idempotent because Supabase records
+      # each processed invoice line with a unique source_key.
+      - name: Confirm main did not change during processing
+        if: steps.check.outputs.csv_count != '0'
+        run: |
+          git fetch origin main
+
+          if [ "$(git rev-parse HEAD)" != "$(git rev-parse origin/main)" ]; then
+            echo "❌ main changed while the invoice was being processed."
+            echo "The run is stopping before commit/push. Re-running is safe and idempotent."
+            exit 1
+          fi
+
+          echo "✓ main is unchanged; safe to commit"
+
+      - name: Commit updated catalog and invoice history
+        if: steps.check.outputs.csv_count != '0'
+        env:
+          TOKEN: ${{ secrets.BOT_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          git add lib/medicines.js
+          git add .github/processed-invoices.json 2>/dev/null || true
+
+          if git diff --staged --quiet; then
+            echo "✓ Nothing to commit."
+            exit 0
+          fi
+
+          ADDED=$(git diff --staged lib/medicines.js | grep '^+.*name:' | wc -l || true)
+
+          git commit -m "Auto-update catalog and inventory from invoice (+${ADDED} medicines)"
+
+          git remote set-url origin https://x-access-token:${TOKEN}@github.com/reehalrohit/DHIMAN-MEDICOS.git
+          git push origin HEAD:main

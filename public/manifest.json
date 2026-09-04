@@ -1,0 +1,43 @@
+{
+  "name": "Dhiman Medicos – Medical Store",
+  "short_name": "Dhiman Medicos",
+  "description": "Browse 1000+ medicines and order on WhatsApp. Binewal, Hoshiarpur.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f0fdf4",
+  "theme_color": "#065f46",
+  "orientation": "portrait-primary",
+  "lang": "en-IN",
+  "categories": ["medical", "health", "shopping"],
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" },
+    { "src": "/apple-touch-icon.png", "sizes": "180x180", "type": "image/png" },
+    { "src": "/favicon.ico", "sizes": "48x48", "type": "image/x-icon" }
+  ],
+  "shortcuts": [
+    {
+      "name": "Search Medicines",
+      "short_name": "Search",
+      "description": "Search the medicine catalog",
+      "url": "/?search=true",
+      "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "WhatsApp Order",
+      "short_name": "Order",
+      "description": "Place an order on WhatsApp",
+      "url": "https://wa.me/919478509980",
+      "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }]
+    }
+  ],
+  "screenshots": [
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "form_factor": "narrow",
+      "label": "Dhiman Medicos medicine catalog"
+    }
+  ]
+}
