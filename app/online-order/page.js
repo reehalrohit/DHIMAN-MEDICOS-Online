@@ -20,7 +20,16 @@ export default function OnlineOrderPage(){
  useEffect(()=>{try{setCart(JSON.parse(localStorage.getItem("dm-online-cart")||"{}"));}catch{} fetch("/api/online-orders/catalog",{cache:"no-store"}).then(r=>r.json()).then(d=>{if(!d.success)throw new Error(d.error);setProducts(d.products||[])}).catch(e=>setMessage(e.message||"Unable to load medicines.")).finally(()=>setLoading(false))},[]);
  useEffect(()=>{try{localStorage.setItem("dm-online-cart",JSON.stringify(cart))}catch{}},[cart]);
  const categories=useMemo(()=>[...new Map(products.map(p=>[p.category_id,{id:p.category_id,name:p.category}])).values()],[products]);
- const cartItems=useMemo(()=>products.filter(p=>cart[p.id]>0).map(p=>({...p,quantity:cart[p.id]}),[products,cart]);
+ const cartItems = useMemo(
+  () =>
+    products
+      .filter((p) => cart[p.id] > 0)
+      .map((p) => ({
+        ...p,
+        quantity: cart[p.id],
+      })),
+  [products, cart]
+);
  const total=cartItems.reduce((s,p)=>s+p.mrp*p.quantity,0),requiresPrescription=cartItems.some(p=>p.prescription);
  const filtered=useMemo(()=>products.filter(p=>(category==="all"||p.category_id===category)&&p.name.toLowerCase().includes(query.toLowerCase())),[products,category,query]);
  const setField=(k,v)=>setForm(old=>({...old,[k]:v}));
