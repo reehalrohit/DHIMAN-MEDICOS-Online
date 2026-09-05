@@ -8,6 +8,23 @@ import { createServerClient } from "@supabase/ssr";
 
 export const dynamic = "force-dynamic";
 
+const STORE_LATITUDE = 31.2847197;
+const STORE_LONGITUDE = 76.2614544;
+const DELIVERY_RADIUS_KM = 2;
+const MIN_DELIVERY_ORDER = 199;
+
+function distanceKm(lat1, lon1, lat2, lon2) {
+  const toRad = (v) => Number(v) * Math.PI / 180;
+  const R = 6371;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *
+    Math.sin(dLon / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
 function normalize(value, max = 200) {
   return String(value ?? "").trim().slice(0, max);
 }
@@ -52,12 +69,35 @@ export async function POST(request) {
 
     const deliveryMethod = body?.delivery_method === "pickup" ? "pickup" : "delivery";
     const paymentMethod = body?.payment_method === "razorpay" ? "razorpay" : "cod";
+    if (deliveryMethod === "delivery" && paymentMethod !== "razorpay") {
+      return NextResponse.json({ success: false, error: "Home delivery requires online advance payment." }, { status: 400 });
+    }
+
+    // Payment policy:
+    // Home delivery = online advance payment only.
+    // Store pickup = pay on pickup only.
+    if (deliveryMethod === "delivery" && paymentMethod !== "razorpay") {
+      return NextResponse.json(
+        { success: false, error: "Home delivery requires online advance payment. Please select Razorpay." },
+        { status: 400 }
+      );
+    }
+    if (deliveryMethod === "pickup" && paymentMethod !== "cod") {
+      return NextResponse.json(
+        { success: false, error: "Store pickup orders can use pay on pickup only." },
+        { status: 400 }
+      );
+    }
     const customerName = normalize(body?.customer_name, 120);
     const customerPhone = cleanPhone(body?.customer_phone);
     const customerEmail = normalize(body?.customer_email, 160) || null;
     if (customerName.length < 2) return NextResponse.json({ success: false, error: "Please enter your name." }, { status: 400 });
     if (!/^[0-9+]{10,15}$/.test(customerPhone)) return NextResponse.json({ success: false, error: "Please enter a valid mobile number." }, { status: 400 });
     if (customerEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(customerEmail)) return NextResponse.json({ success: false, error: "Please enter a valid email address." }, { status: 400 });
+
+    const deliveryLatitude = Number(body?.delivery_latitude);
+    const deliveryLongitude = Number(body?.delivery_longitude);
+    let deliveryDistanceKm = null;
 
     let addressLine1 = normalize(body?.address_line1, 200);
     let addressLine2 = normalize(body?.address_line2, 200) || null;
@@ -67,8 +107,19 @@ export async function POST(request) {
     let pincode = normalize(body?.pincode, 6);
     if (deliveryMethod === "pickup") {
       addressLine1 = "Store Pickup"; addressLine2 = null; landmark = null; city = "Binewal"; state = "Punjab"; pincode = "144523";
-    } else if (!addressLine1 || !city || !/^[0-9]{6}$/.test(pincode)) {
-      return NextResponse.json({ success: false, error: "Please enter your complete delivery address and 6-digit PIN code." }, { status: 400 });
+    } else {
+      if (!addressLine1 || !city || !/^[0-9]{6}$/.test(pincode)) {
+        return NextResponse.json({ success: false, error: "Please enter your complete delivery address and 6-digit PIN code." }, { status: 400 });
+      }
+      if (!Number.isFinite(deliveryLatitude) || !Number.isFinite(deliveryLongitude) ||
+          deliveryLatitude < -90 || deliveryLatitude > 90 ||
+          deliveryLongitude < -180 || deliveryLongitude > 180) {
+        return NextResponse.json({ success: false, error: "Please allow location access to verify the 2 km delivery area." }, { status: 400 });
+      }
+      deliveryDistanceKm = distanceKm(STORE_LATITUDE, STORE_LONGITUDE, deliveryLatitude, deliveryLongitude);
+      if (deliveryDistanceKm > DELIVERY_RADIUS_KM) {
+        return NextResponse.json({ success: false, error: "Sorry, home delivery is available only within 2 km of Dhiman Medicos." }, { status: 400 });
+      }
     }
 
     const index = catalogIndex();
@@ -115,12 +166,15 @@ export async function POST(request) {
 
     subtotal = Math.round(subtotal * 100) / 100;
     const total = subtotal;
+    if (deliveryMethod === "delivery" && total < MIN_DELIVERY_ORDER) {
+      return NextResponse.json({ success: false, error: `Home delivery requires a minimum order value of ₹${MIN_DELIVERY_ORDER}.` }, { status: 400 });
+    }
     const orderNumber = `DMO-${new Date().toISOString().slice(0, 10).replaceAll("-", "")}-${randomUUID().slice(0, 6).toUpperCase()}`;
     const trackingToken = randomUUID();
     const { data: order, error: orderError } = await supabaseAdmin.from("customer_orders").insert({
       order_number: orderNumber, tracking_token: trackingToken, user_id: user.id, customer_name: customerName, customer_phone: customerPhone, customer_email: customerEmail,
       address_line1: addressLine1, address_line2: addressLine2, landmark, city, state, pincode, delivery_method: deliveryMethod,
-      notes: normalize(body?.notes, 500) || null, subtotal, discount: 0, delivery_fee: 0, total, payment_method: paymentMethod,
+      notes: normalize(body?.notes, 500) || null, subtotal, discount: 0, delivery_fee: 0, total, payment_method: paymentMethod, delivery_distance_km: deliveryDistanceKm,
       payment_status: "pending", order_status: "pending_review", prescription_status: prescriptionRequired ? "pending" : "not_required", prescription_id: prescriptionRequired ? prescriptionId : null,
     }).select("id,order_number,tracking_token,total,payment_method,prescription_status").single();
     if (orderError) throw orderError;
