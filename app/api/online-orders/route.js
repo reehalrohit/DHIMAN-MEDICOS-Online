@@ -108,6 +108,16 @@ export async function POST(request) {
     }
 
     const index = catalogIndex();
+
+    const { data: regulatoryRows, error: regulatoryError } = await supabaseAdmin
+      .from("medicine_regulatory_classification")
+      .select("medicine_id,schedule,nrx");
+    if (regulatoryError) throw regulatoryError;
+
+    const regulatoryMap = new Map(
+      (regulatoryRows || []).map((row) => [String(row.medicine_id), row])
+    );
+
     const quantities = new Map();
     for (const item of rawItems) {
       const id = normalize(item?.medicine_id, 120);
@@ -135,7 +145,15 @@ export async function POST(request) {
       const product = index.get(id);
       const quantity = quantities.get(id);
       if ((stock.get(id) || 0) < quantity) return NextResponse.json({ success: false, error: `${product.name} is currently unavailable in the requested quantity.` }, { status: 409 });
-      if (product.prescription) prescriptionRequired = true;
+
+      const regulation = regulatoryMap.get(String(id));
+      const schedule = regulation?.schedule || null;
+      const nrx = Boolean(regulation?.nrx);
+
+      if (Boolean(schedule) || nrx || product.prescription) {
+        prescriptionRequired = true;
+      }
+
       const lineTotal = Math.round(product.mrp * quantity * 100) / 100;
       subtotal += lineTotal;
       items.push({ medicine_id: id, medicine_name: product.name, category: product.category, quantity, unit_price: product.mrp, line_total: lineTotal });
@@ -143,7 +161,24 @@ export async function POST(request) {
 
     const prescriptionId = body?.prescription_id ? Number(body.prescription_id) : null;
     if (prescriptionRequired) {
-      if (!Number.isInteger(prescriptionId) || prescriptionId <= 0) return NextResponse.json({ success: false, error: "A prescription is required for one or more medicines in your cart." }, { status: 400 });
+      if (!Number.isInteger(prescriptionId) || prescriptionId <= 0) {
+        const regulatedNames = items.map((item) => {
+          const r = regulatoryMap.get(String(item.medicine_id));
+          if (r?.nrx && r?.schedule) return `${item.medicine_name} (Schedule ${r.schedule}, NRx)`;
+          if (r?.nrx) return `${item.medicine_name} (NRx)`;
+          if (r?.schedule) return `${item.medicine_name} (Schedule ${r.schedule})`;
+          return null;
+        }).filter(Boolean);
+
+        const detail = regulatedNames.length
+          ? ` Prescription required for: ${regulatedNames.join(", ")}.`
+          : "";
+
+        return NextResponse.json(
+          { success: false, error: `A valid prescription is required for one or more medicines in your cart.${detail}` },
+          { status: 400 }
+        );
+      }
       const { data: prescription, error: prescriptionError } = await supabaseAdmin.from("prescriptions").select("id,status,order_id,user_id").eq("id", prescriptionId).maybeSingle();
       if (prescriptionError) throw prescriptionError;
       if (!prescription || prescription.order_id || prescription.user_id !== user.id || prescription.status === "rejected") return NextResponse.json({ success: false, error: "The uploaded prescription cannot be used for this order." }, { status: 400 });
