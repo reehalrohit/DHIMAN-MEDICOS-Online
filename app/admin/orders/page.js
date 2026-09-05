@@ -23,6 +23,7 @@ export default function AdminOrdersPage() {
   const [reviewed, setReviewed] = useState({});
   const [rxUrl, setRxUrl] = useState("");
   const [rxLoading, setRxLoading] = useState(false);
+  const [rejectReason, setRejectReason] = useState("");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -51,6 +52,7 @@ export default function AdminOrdersPage() {
   async function openReview(order) {
     setReviewing(order);
     setRxUrl("");
+    setRejectReason("");
     setError("");
 
     if (order.prescription_id) {
@@ -61,7 +63,9 @@ export default function AdminOrdersPage() {
           { cache: "no-store" }
         );
         const d = await r.json();
-        if (!r.ok || !d.success) throw new Error(d.error || "Unable to open prescription.");
+        if (!r.ok || !d.success) {
+          throw new Error(d.error || "Unable to open prescription.");
+        }
         setRxUrl(d.prescription?.url || "");
       } catch (e) {
         setError(e.message || "Unable to open prescription.");
@@ -74,9 +78,10 @@ export default function AdminOrdersPage() {
   function closeReview() {
     setReviewing(null);
     setRxUrl("");
+    setRejectReason("");
   }
 
-  async function update(id, payload) {
+  async function update(id, payload, keepReviewOpen = false) {
     setBusy(id);
     setError("");
     try {
@@ -88,7 +93,12 @@ export default function AdminOrdersPage() {
       const d = await r.json();
       if (!r.ok || !d.success) throw new Error(d.error || "Update failed.");
       await load();
-      closeReview();
+
+      if (keepReviewOpen && d.order) {
+        setReviewing(d.order);
+      } else {
+        closeReview();
+      }
     } catch (e) {
       setError(e.message || "Update failed.");
     } finally {
@@ -96,18 +106,49 @@ export default function AdminOrdersPage() {
     }
   }
 
-  async function approvePrescriptionFromReview() {
-    if (!reviewing?.prescription_id) return;
-    await update(reviewing.id, { prescription_status: "approved" });
+  async function rejectOrder() {
+    const reason = rejectReason.trim();
+    if (!reason) {
+      setError("Please enter a reason before rejecting the order.");
+      return;
+    }
+    if (reason.length < 5) {
+      setError("Please provide a more specific rejection reason.");
+      return;
+    }
+    if (!reviewing) return;
+    await update(reviewing.id, {
+      status: "rejected",
+      rejection_reason: reason,
+    });
   }
 
-  async function rejectPrescriptionFromReview() {
+  async function approvePrescription() {
     if (!reviewing?.prescription_id) return;
-    await update(reviewing.id, { prescription_status: "rejected" });
+    await update(
+      reviewing.id,
+      { prescription_status: "approved" },
+      true
+    );
+  }
+
+  async function rejectPrescription() {
+    if (!reviewing?.prescription_id) return;
+    const reason = rejectReason.trim();
+    if (!reason) {
+      setError("Enter a reason for rejecting the prescription.");
+      return;
+    }
+    await update(
+      reviewing.id,
+      { prescription_status: "rejected", rejection_reason: reason },
+      false
+    );
   }
 
   function markReviewed(orderId) {
     setReviewed((old) => ({ ...old, [orderId]: true }));
+    setError("");
   }
 
   return (
@@ -118,7 +159,7 @@ export default function AdminOrdersPage() {
             <div style={s.kicker}>DHIMAN MEDICOS · STAFF</div>
             <h1 style={{ margin: "4px 0" }}>Online Store Orders</h1>
             <p style={s.muted}>
-              Review the complete order and prescription first. Acceptance is only available after review.
+              Review the complete order and prescription first. Accept or reject only after review.
             </p>
           </div>
           <button onClick={load} style={s.refresh}>↻ Refresh</button>
@@ -147,7 +188,7 @@ export default function AdminOrdersPage() {
               const canAccept =
                 o.order_status === "pending_review" &&
                 hasBeenReviewed &&
-                (!needsRx) &&
+                !needsRx &&
                 (o.payment_method !== "razorpay" || o.payment_status === "paid");
 
               return (
@@ -155,9 +196,7 @@ export default function AdminOrdersPage() {
                   <div style={s.top}>
                     <div>
                       <strong>{o.order_number}</strong>
-                      <small style={s.small}>
-                        {new Date(o.created_at).toLocaleString("en-IN")}
-                      </small>
+                      <small style={s.small}>{new Date(o.created_at).toLocaleString("en-IN")}</small>
                     </div>
                     <span style={s.badge}>{labels[o.order_status] || o.order_status}</span>
                   </div>
@@ -170,10 +209,9 @@ export default function AdminOrdersPage() {
                         ? "🏪 Store pickup"
                         : `🏠 ${o.address_line1}, ${o.city} ${o.pincode}`}
                     </span>
-                    {o.delivery_method === "delivery" &&
-                      Number.isFinite(Number(o.delivery_distance_km)) && (
-                        <span>📍 {Number(o.delivery_distance_km).toFixed(2)} km from store</span>
-                      )}
+                    {o.delivery_method === "delivery" && Number.isFinite(Number(o.delivery_distance_km)) && (
+                      <span>📍 {Number(o.delivery_distance_km).toFixed(2)} km from store</span>
+                    )}
                   </div>
 
                   <div style={s.summary}>
@@ -185,12 +223,14 @@ export default function AdminOrdersPage() {
                     )}
                   </div>
 
+                  {o.rejection_reason && (
+                    <div style={s.rejectedNote}>
+                      <strong>Rejection reason:</strong> {o.rejection_reason}
+                    </div>
+                  )}
+
                   <div style={s.actions}>
-                    <button
-                      onClick={() => openReview(o)}
-                      disabled={busy === o.id}
-                      style={s.reviewButton}
-                    >
+                    <button onClick={() => openReview(o)} disabled={busy === o.id} style={s.reviewButton}>
                       🔎 Review order & prescription
                     </button>
 
@@ -203,41 +243,23 @@ export default function AdminOrdersPage() {
                     )}
 
                     {canAccept && (
-                      <button
-                        disabled={busy === o.id}
-                        onClick={() => update(o.id, { status: "confirmed" })}
-                        style={s.primary}
-                      >
+                      <button disabled={busy === o.id} onClick={() => update(o.id, { status: "confirmed" })} style={s.primary}>
                         ✓ Accept order
                       </button>
                     )}
 
                     {o.order_status === "confirmed" && (
-                      <button disabled={busy === o.id} onClick={() => update(o.id, { status: "preparing" })} style={s.primary}>
-                        Start preparing
-                      </button>
+                      <button disabled={busy === o.id} onClick={() => update(o.id, { status: "preparing" })} style={s.primary}>Start preparing</button>
                     )}
                     {o.order_status === "preparing" && (
-                      <button disabled={busy === o.id} onClick={() => update(o.id, { status: "ready" })} style={s.primary}>
-                        Mark ready
-                      </button>
+                      <button disabled={busy === o.id} onClick={() => update(o.id, { status: "ready" })} style={s.primary}>Mark ready</button>
                     )}
                     {o.order_status === "ready" && (
-                      <button disabled={busy === o.id} onClick={() => update(o.id, { status: "out_for_delivery" })} style={s.primary}>
-                        Out for delivery
-                      </button>
+                      <button disabled={busy === o.id} onClick={() => update(o.id, { status: "out_for_delivery" })} style={s.primary}>Out for delivery</button>
                     )}
                     {o.order_status === "out_for_delivery" && (
-                      <button disabled={busy === o.id} onClick={() => update(o.id, { status: "delivered" })} style={s.primary}>
-                        Mark delivered
-                      </button>
+                      <button disabled={busy === o.id} onClick={() => update(o.id, { status: "delivered" })} style={s.primary}>Mark delivered</button>
                     )}
-                    {["pending_review", "confirmed", "preparing"].includes(o.order_status) &&
-                      o.payment_status !== "paid" && (
-                        <button disabled={busy === o.id} onClick={() => update(o.id, { status: "cancelled" })} style={s.cancel}>
-                          Cancel
-                        </button>
-                      )}
                   </div>
                 </article>
               );
@@ -253,9 +275,7 @@ export default function AdminOrdersPage() {
               <div>
                 <div style={s.kicker}>ORDER REVIEW</div>
                 <h2 style={{ margin: "4px 0" }}>{reviewing.order_number}</h2>
-                <div style={s.muted}>
-                  {reviewing.customer_name} · {reviewing.customer_phone}
-                </div>
+                <div style={s.muted}>{reviewing.customer_name} · {reviewing.customer_phone}</div>
               </div>
               <button onClick={closeReview} style={s.close}>✕</button>
             </header>
@@ -267,9 +287,7 @@ export default function AdminOrdersPage() {
                   <div key={`${i.medicine_id || i.medicine_name}-${n}`} style={s.itemRow}>
                     <div>
                       <strong>{i.medicine_name}</strong>
-                      <small style={s.small}>
-                        Qty {i.quantity} · ₹{Number(i.unit_price).toFixed(2)} each
-                      </small>
+                      <small style={s.small}>Qty {i.quantity} · ₹{Number(i.unit_price).toFixed(2)} each</small>
                     </div>
                     <strong>₹{Number(i.line_total).toFixed(2)}</strong>
                   </div>
@@ -298,18 +316,10 @@ export default function AdminOrdersPage() {
                 <div>
                   <div style={s.rxStatus}>
                     <span>Status: <b>{reviewing.prescription_status}</b></span>
-                    {reviewing.prescription_status === "pending" && (
-                      <span>Review the document before approving.</span>
-                    )}
+                    <span>Review the document before deciding.</span>
                   </div>
-                  <iframe
-                    src={rxUrl}
-                    title="Customer prescription"
-                    style={s.pdf}
-                  />
-                  <a href={rxUrl} target="_blank" rel="noreferrer" style={s.openRx}>
-                    Open prescription in new tab ↗
-                  </a>
+                  <iframe src={rxUrl} title="Customer prescription" style={s.pdf} />
+                  <a href={rxUrl} target="_blank" rel="noreferrer" style={s.openRx}>Open prescription in new tab ↗</a>
                 </div>
               ) : (
                 <div style={s.alert}>Unable to load the prescription document.</div>
@@ -322,26 +332,32 @@ export default function AdminOrdersPage() {
                   <input
                     type="checkbox"
                     checked={Boolean(reviewed[reviewing.id])}
-                    onChange={(e) => markReviewed(reviewing.id)}
+                    onChange={(e) => {
+                      setReviewed((old) => ({ ...old, [reviewing.id]: e.target.checked }));
+                      setError("");
+                    }}
                   />
                   I have reviewed the order items and prescription.
+                </label>
+
+                <label style={s.label}>
+                  Rejection / review remarks
+                  <textarea
+                    value={rejectReason}
+                    onChange={(e) => setRejectReason(e.target.value.slice(0, 1000))}
+                    placeholder="Enter the reason here if you need to reject the order or prescription."
+                    rows={4}
+                    style={s.textarea}
+                  />
                 </label>
 
                 <div style={s.actions}>
                   {reviewing.prescription_status === "pending" && reviewing.prescription_id && (
                     <>
-                      <button
-                        disabled={busy === reviewing.id || !rxUrl}
-                        onClick={approvePrescriptionFromReview}
-                        style={s.green}
-                      >
+                      <button disabled={busy === reviewing.id || !rxUrl} onClick={approvePrescription} style={s.green}>
                         Approve prescription
                       </button>
-                      <button
-                        disabled={busy === reviewing.id || !rxUrl}
-                        onClick={rejectPrescriptionFromReview}
-                        style={s.red}
-                      >
+                      <button disabled={busy === reviewing.id || !rxUrl || !rejectReason.trim()} onClick={rejectPrescription} style={s.red}>
                         Reject prescription
                       </button>
                     </>
@@ -354,6 +370,16 @@ export default function AdminOrdersPage() {
                       style={s.primary}
                     >
                       ✓ Accept reviewed order
+                    </button>
+                  )}
+
+                  {reviewed[reviewing.id] && (
+                    <button
+                      disabled={busy === reviewing.id || !rejectReason.trim()}
+                      onClick={rejectOrder}
+                      style={s.redStrong}
+                    >
+                      ✕ Reject order with remarks
                     </button>
                   )}
 
@@ -387,13 +413,14 @@ const s = {
   badge:{padding:"5px 9px",borderRadius:999,background:"#eff7f1",color:"#126547",fontSize:12,fontWeight:800},
   customer:{display:"grid",gap:3,margin:"13px 0",color:"#435149"},
   summary:{display:"grid",gap:7,padding:12,borderRadius:13,background:"#f6f9f7",border:"1px solid #e2eae5"},
-  summaryRow:{display:"flex",justifyContent:"space-between"},actions:{display:"flex",gap:8,flexWrap:"wrap",marginTop:12,alignItems:"center"},
+  actions:{display:"flex",gap:8,flexWrap:"wrap",marginTop:12,alignItems:"center"},
   reviewButton:{padding:"10px 13px",border:"1px solid #b9d9cb",borderRadius:10,background:"#edf8f2",color:"#146344",fontWeight:900},
   primary:{padding:"10px 13px",border:0,borderRadius:10,background:"#087f5b",color:"white",fontWeight:900},
   green:{padding:"10px 13px",border:0,borderRadius:10,background:"#e8f6ed",color:"#116842",fontWeight:900},
   red:{padding:"10px 13px",border:"1px solid #e9b6af",borderRadius:10,background:"white",color:"#a23c33",fontWeight:900},
-  cancel:{padding:"10px 13px",border:"1px solid #d7cfca",borderRadius:10,background:"white",color:"#74564b",fontWeight:800},
-  wait:{fontSize:12,color:"#7b5a27",fontWeight:700},
+  redStrong:{padding:"10px 13px",border:0,borderRadius:10,background:"#b83b30",color:"white",fontWeight:900},
+  secondary:{width:"100%",marginTop:12,padding:"11px 13px",border:"1px solid #d6e1db",borderRadius:10,background:"white",fontWeight:800},
+  wait:{fontSize:12,color:"#7b5a27",fontWeight:700}, rejectedNote:{marginTop:10,padding:10,borderRadius:10,background:"#fff3f1",color:"#8f3a32",fontSize:13},
   overlay:{position:"fixed",inset:0,zIndex:1000,background:"rgba(9,26,19,.62)",display:"flex",alignItems:"flex-start",justifyContent:"center",padding:"20px 12px",overflowY:"auto"},
   modal:{width:"min(820px,100%)",background:"#fff",borderRadius:20,padding:20,boxShadow:"0 24px 80px rgba(0,0,0,.25)"},
   modalHeader:{display:"flex",justifyContent:"space-between",gap:12,alignItems:"flex-start",paddingBottom:12,borderBottom:"1px solid #e2eae5"},
@@ -407,5 +434,6 @@ const s = {
   openRx:{display:"inline-block",marginTop:8,color:"#087f5b",fontWeight:900,textDecoration:"none"},
   confirmReview:{marginTop:16,padding:15,borderRadius:15,background:"#f7faf8",border:"1px solid #dfe8e2"},
   checkRow:{display:"flex",gap:9,alignItems:"flex-start",fontWeight:800,fontSize:14,lineHeight:1.45},
-  secondary:{width:"100%",marginTop:12,padding:"11px 13px",border:"1px solid #d6e1db",borderRadius:10,background:"white",fontWeight:800},
+  label:{display:"grid",gap:6,fontSize:13,fontWeight:800,marginTop:12},
+  textarea:{width:"100%",boxSizing:"border-box",padding:12,border:"1px solid #d5dfda",borderRadius:11,fontSize:14,resize:"vertical"},
 };
