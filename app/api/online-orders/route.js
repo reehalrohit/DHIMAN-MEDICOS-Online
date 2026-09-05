@@ -73,21 +73,6 @@ export async function POST(request) {
       return NextResponse.json({ success: false, error: "Home delivery requires online advance payment." }, { status: 400 });
     }
 
-    // Payment policy:
-    // Home delivery = online advance payment only.
-    // Store pickup = pay on pickup only.
-    if (deliveryMethod === "delivery" && paymentMethod !== "razorpay") {
-      return NextResponse.json(
-        { success: false, error: "Home delivery requires online advance payment. Please select Razorpay." },
-        { status: 400 }
-      );
-    }
-    if (deliveryMethod === "pickup" && paymentMethod !== "cod") {
-      return NextResponse.json(
-        { success: false, error: "Store pickup orders can use pay on pickup only." },
-        { status: 400 }
-      );
-    }
     const customerName = normalize(body?.customer_name, 120);
     const customerPhone = cleanPhone(body?.customer_phone);
     const customerEmail = normalize(body?.customer_email, 160) || null;
@@ -174,7 +159,7 @@ export async function POST(request) {
     const { data: order, error: orderError } = await supabaseAdmin.from("customer_orders").insert({
       order_number: orderNumber, tracking_token: trackingToken, user_id: user.id, customer_name: customerName, customer_phone: customerPhone, customer_email: customerEmail,
       address_line1: addressLine1, address_line2: addressLine2, landmark, city, state, pincode, delivery_method: deliveryMethod,
-      notes: normalize(body?.notes, 500) || null, subtotal, discount: 0, delivery_fee: 0, total, payment_method: paymentMethod, delivery_distance_km: deliveryDistanceKm,
+      notes: normalize(body?.notes, 500) || null, subtotal, discount: 0, delivery_fee: 0, total, payment_method: paymentMethod, delivery_distance_km: deliveryDistanceKm, delivery_latitude: deliveryMethod === "delivery" ? deliveryLatitude : null, delivery_longitude: deliveryMethod === "delivery" ? deliveryLongitude : null,
       payment_status: "pending", order_status: "pending_review", prescription_status: prescriptionRequired ? "pending" : "not_required", prescription_id: prescriptionRequired ? prescriptionId : null,
     }).select("id,order_number,tracking_token,total,payment_method,prescription_status").single();
     if (orderError) throw orderError;
