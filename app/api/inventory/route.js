@@ -36,8 +36,6 @@ function getSupabaseAdmin() {
 
 /* =========================================================
    NORMALIZE MEDICINE NAME
-
-   Used only for matching inventory medicines with medicines.js
 ========================================================= */
 
 function normalizeName(value) {
@@ -48,22 +46,112 @@ function normalizeName(value) {
 }
 
 /* =========================================================
+   NORMALIZE EXPIRY DATE
+ *
+ * Database format:
+ * YYYY-MM-DD
+ *
+ * Accepted input:
+ * YYYY-MM-DD
+ * DD-MM-YYYY
+ * DD/MM/YYYY
+ * DD-MM-YY
+ * DD/MM/YY
+========================================================= */
+
+function normalizeExpiryDate(value) {
+  if (value === undefined || value === null) {
+    return null;
+  }
+
+  const input = String(value).trim();
+
+  if (!input) {
+    return null;
+  }
+
+  // Already canonical YYYY-MM-DD
+  let match = input.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+
+  if (match) {
+    const [, year, month, day] = match;
+
+    if (isValidDateParts(year, month, day)) {
+      return `${year}-${month}-${day}`;
+    }
+
+    throw new Error("Invalid expiry date");
+  }
+
+  // DD-MM-YYYY or DD/MM/YYYY
+  match = input.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$/);
+
+  if (match) {
+    const [, day, month, year] = match;
+
+    if (isValidDateParts(year, month, day)) {
+      return `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
+    }
+
+    throw new Error("Invalid expiry date");
+  }
+
+  // DD-MM-YY or DD/MM/YY
+  match = input.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{2})$/);
+
+  if (match) {
+    const [, day, month, shortYear] = match;
+
+    const yearNumber = Number(shortYear);
+
+    // Pharmacy stock dates are normally contemporary.
+    // Interpret 00–49 as 2000–2049 and 50–99 as 1950–1999.
+    const year =
+      yearNumber <= 49
+        ? 2000 + yearNumber
+        : 1900 + yearNumber;
+
+    const yearString = String(year);
+
+    if (isValidDateParts(yearString, month, day)) {
+      return `${yearString}-${month.padStart(2, "0")}-${day.padStart(
+        2,
+        "0"
+      )}`;
+    }
+
+    throw new Error("Invalid expiry date");
+  }
+
+  throw new Error(
+    "Invalid expiry date. Use YYYY-MM-DD, DD-MM-YYYY or DD/MM/YYYY."
+  );
+}
+
+function isValidDateParts(year, month, day) {
+  const y = Number(year);
+  const m = Number(month);
+  const d = Number(day);
+
+  if (!Number.isInteger(y) || !Number.isInteger(m) || !Number.isInteger(d)) {
+    return false;
+  }
+
+  if (m < 1 || m > 12 || d < 1 || d > 31) {
+    return false;
+  }
+
+  const date = new Date(Date.UTC(y, m - 1, d));
+
+  return (
+    date.getUTCFullYear() === y &&
+    date.getUTCMonth() === m - 1 &&
+    date.getUTCDate() === d
+  );
+}
+
+/* =========================================================
    BUILD PRICE INDEX FROM medicines.js
-
-   CATALOG structure:
-
-   [
-     {
-       id: "...",
-       name: "...",
-       items: [
-         {
-           name: "...",
-           mrp: 123.45
-         }
-       ]
-     }
-   ]
 ========================================================= */
 
 function buildCatalogIndex() {
@@ -79,12 +167,6 @@ function buildCatalogIndex() {
 
       const mrp = Number(medicine?.mrp);
 
-      /*
-       * Keep first valid catalog entry.
-       *
-       * This avoids a later duplicate accidentally replacing
-       * a valid price with an invalid value.
-       */
       if (!index.has(name)) {
         index.set(name, {
           name: medicine.name,
@@ -110,22 +192,12 @@ function findCatalogMedicine(index, inventoryRow) {
     return null;
   }
 
-  /*
-   * First try exact normalized name.
-   */
   const exact = index.get(inventoryName);
 
   if (exact) {
     return exact;
   }
 
-  /*
-   * Second attempt:
-   * compare medicineKey values.
-   *
-   * Useful when inventory medicine_id was originally created
-   * using medicineKey(name).
-   */
   const inventoryKey = String(
     inventoryRow?.medicine_id || medicineKey(inventoryName)
   );
@@ -141,18 +213,6 @@ function findCatalogMedicine(index, inventoryRow) {
 
 /* =========================================================
    GET /api/inventory
-
-   Combines:
-
-   Supabase
-      quantity
-      stock status
-      medicine_id
-
-   medicines.js
-      mrp
-      category
-
 ========================================================= */
 
 export async function GET(request) {
@@ -186,12 +246,6 @@ export async function GET(request) {
         row
       );
 
-      /*
-       * Prefer catalog MRP.
-       *
-       * If no catalog match exists, try any price already
-       * stored in Supabase.
-       */
       const catalogMrp = Number(catalogMedicine?.mrp);
 
       const databaseMrp = Number(
@@ -211,9 +265,6 @@ export async function GET(request) {
       return {
         ...row,
 
-        /*
-         * POS can use either mrp or price.
-         */
         mrp,
         price: mrp,
 
@@ -290,29 +341,42 @@ export async function POST(request) {
     const batchNo =
       body?.batchNo === undefined
         ? undefined
-        : body?.batchNo === null || String(body.batchNo).trim() === ""
+        : body?.batchNo === null ||
+          String(body.batchNo).trim() === ""
           ? null
           : String(body.batchNo).trim();
 
-    const expiryDate =
-      body?.expiryDate === undefined
-        ? undefined
-        : body?.expiryDate === null || String(body.expiryDate).trim() === ""
-          ? null
-          : String(body.expiryDate).trim();
+    /* =======================================================
+       EXPIRY DATE
+    ======================================================= */
 
-    if (
-      expiryDate !== undefined &&
-      !/^\d{4}-\d{2}-\d{2}$/.test(expiryDate)
-    ) {
-      return NextResponse.json(
-        {
-          success: false,
-          error: "expiryDate must use YYYY-MM-DD format",
-        },
-        { status: 400 }
-      );
+    let expiryDate;
+
+    if (body?.expiryDate === undefined) {
+      expiryDate = undefined;
+    } else {
+      try {
+        expiryDate = normalizeExpiryDate(
+          body?.expiryDate
+        );
+      } catch (error) {
+        return NextResponse.json(
+          {
+            success: false,
+            error:
+              error?.message ||
+              "Invalid expiry date",
+          },
+          {
+            status: 400,
+          }
+        );
+      }
     }
+
+    /* =======================================================
+       STOCK STATUS
+    ======================================================= */
 
     const status = getStockStatus(
       quantity,
@@ -328,8 +392,11 @@ export async function POST(request) {
       updated_at: new Date().toISOString(),
     };
 
-    // Only change batch/expiry when the caller supplied those fields.
-    // This prevents a stock-only update from accidentally clearing metadata.
+    /*
+     * Only change batch/expiry when supplied.
+     * This prevents a stock-only update from clearing metadata.
+     */
+
     if (batchNo !== undefined) {
       record.batch_no = batchNo;
     }
@@ -350,9 +417,10 @@ export async function POST(request) {
       throw error;
     }
 
-    /*
-     * Return MRP immediately as well.
-     */
+    /* =======================================================
+       RETURN CATALOG PRICE
+    ======================================================= */
+
     const catalogIndex = buildCatalogIndex();
 
     const catalogMedicine = findCatalogMedicine(
