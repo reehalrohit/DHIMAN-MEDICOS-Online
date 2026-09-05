@@ -26,69 +26,143 @@ function label(schedule, nrx, legacy) {
 
 export async function GET() {
   try {
-    const { data: batches, error } = await supabaseAdmin
-      .from("inventory_batches")
-      .select("medicine_id,quantity,expiry")
-      .gt("quantity", 0);
-    if (error) throw error;
+    const [
+      { data: batches, error: batchError },
+      { data: inventory, error: inventoryError },
+      { data: classes, error: classError },
+    ] = await Promise.all([
+      supabaseAdmin
+        .from("inventory_batches")
+        .select("medicine_id,quantity,expiry")
+        .gt("quantity", 0),
+      supabaseAdmin
+        .from("inventory")
+        .select("medicine_id,quantity")
+        .gt("quantity", 0),
+      supabaseAdmin
+        .from("medicine_regulatory_classification")
+        .select("medicine_id,schedule,nrx"),
+    ]);
 
-    const { data: classes, error: classError } = await supabaseAdmin
-      .from("medicine_regulatory_classification")
-      .select("medicine_id,schedule,nrx");
+    if (batchError) throw batchError;
+    if (inventoryError) throw inventoryError;
     if (classError) throw classError;
 
-    const classMap = new Map((classes || []).map(r => [String(r.medicine_id), r]));
-    const today = new Date(); today.setHours(0,0,0,0);
+    const classMap = new Map(
+      (classes || []).map((row) => [String(row.medicine_id), row])
+    );
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    // If ANY batch record exists for a medicine, it is batch-managed:
+    // only positive, non-expired batch stock is sellable.
+    const batchMedicineIds = new Set(
+      (batches || []).map((row) => String(row.medicine_id))
+    );
+
     const sellable = new Map();
 
-    for (const b of batches || []) {
-      const expiry = parseExpiry(b.expiry);
+    for (const batch of batches || []) {
+      const expiry = parseExpiry(batch.expiry);
+
       if (expiry && expiry < today) continue;
-      const id = String(b.medicine_id);
-      sellable.set(id, (sellable.get(id) || 0) + Number(b.quantity || 0));
+
+      const id = String(batch.medicine_id);
+      sellable.set(
+        id,
+        (sellable.get(id) || 0) + Number(batch.quantity || 0)
+      );
     }
 
-    const seen = new Set(), products = [];
+    // Fallback ONLY when there is no inventory_batches record at all.
+    // This fixes medicines such as catalog/inventory-only items without
+    // bypassing expiry protection for batch-managed medicines.
+    for (const row of inventory || []) {
+      const id = String(row.medicine_id);
+
+      if (batchMedicineIds.has(id)) continue;
+
+      const quantity = Number(row.quantity || 0);
+
+      if (quantity > 0) {
+        sellable.set(id, quantity);
+      }
+    }
+
+    const seen = new Set();
+    const products = [];
+
     for (const category of CATALOG || []) {
       for (const medicine of category?.items || []) {
         const name = String(medicine?.name || "").trim();
         const mrp = Number(medicine?.mrp);
+
         if (!name || !Number.isFinite(mrp) || mrp <= 0) continue;
 
         const id = medicineKey(name);
+
         if (seen.has(id)) continue;
         seen.add(id);
 
         const legacy = Boolean(medicine.prescription);
-        const c = classMap.get(String(id));
-        const schedule = c?.schedule || null;
-        const nrx = Boolean(c?.nrx);
-        const required = Boolean(schedule) || nrx || legacy;
+        const classification = classMap.get(String(id));
+
+        const schedule = classification?.schedule || null;
+        const nrx = Boolean(classification?.nrx);
+        const prescriptionRequired =
+          Boolean(schedule) || nrx || legacy;
 
         products.push({
-          id, name, mrp,
+          id,
+          name,
+          mrp,
           category_id: category.id,
           category: category.name,
           category_icon: category.icon,
-          prescription: required,
-          prescription_required: required,
+
+          prescription: prescriptionRequired,
+          prescription_required: prescriptionRequired,
+
           schedule,
           nrx,
-          prescription_label: label(schedule, nrx, legacy),
-          in_stock: (sellable.get(String(id)) || 0) > 0,
+
+          prescription_label: label(
+            schedule,
+            nrx,
+            legacy
+          ),
+
+          in_stock:
+            (sellable.get(String(id)) || 0) > 0,
         });
       }
     }
 
     return NextResponse.json(
-      { success: true, products },
-      { headers: { "Cache-Control": "no-store, max-age=0" } }
+      {
+        success: true,
+        products,
+      },
+      {
+        headers: {
+          "Cache-Control": "no-store, max-age=0",
+        },
+      }
     );
   } catch (error) {
     console.error("Online catalog error:", error);
+
     return NextResponse.json(
-      { success: false, error: error?.message || "Unable to load online catalog." },
-      { status: 500 }
+      {
+        success: false,
+        error:
+          error?.message ||
+          "Unable to load online catalog.",
+      },
+      {
+        status: 500,
+      }
     );
   }
 }
