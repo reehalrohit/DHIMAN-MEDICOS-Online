@@ -1,83 +1,77 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { getSupabaseBrowserClient } from "../../lib/supabase-browser";
+import { useEffect, useMemo, useState } from "react";
 
-export default function AdminDashboard() {
-  const router = useRouter();
-  const [user, setUser] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [signingOut, setSigningOut] = useState(false);
+export default function PrescriptionClassification() {
+  const [rows,setRows]=useState([]),[q,setQ]=useState(""),[filter,setFilter]=useState("all");
+  const [loading,setLoading]=useState(true),[saving,setSaving]=useState(""),[message,setMessage]=useState(""),[error,setError]=useState("");
 
-  useEffect(() => {
-    let active = true;
-    async function load() {
-      try {
-        const supabase = getSupabaseBrowserClient();
-        const { data } = await supabase.auth.getUser();
-        if (active) setUser(data.user || null);
-      } finally {
-        if (active) setLoading(false);
-      }
-    }
-    load();
-    return () => { active = false; };
-  }, []);
+  useEffect(()=>{
+    fetch("/api/admin/regulatory-classification",{cache:"no-store"})
+      .then(async r=>{const d=await r.json();if(!r.ok||!d.success)throw new Error(d.error||"Unable to load medicines.");setRows(d.products||[])})
+      .catch(e=>setError(e.message))
+      .finally(()=>setLoading(false));
+  },[]);
 
-  async function logout() {
-    try {
-      setSigningOut(true);
-      const supabase = getSupabaseBrowserClient();
-      await supabase.auth.signOut();
-      router.replace("/admin/login");
-      router.refresh();
-    } finally {
-      setSigningOut(false);
-    }
+  const shown=useMemo(()=>{
+    const term=q.trim().toLowerCase();
+    return rows.filter(r=>{
+      const text=!term||r.name.toLowerCase().includes(term)||r.category.toLowerCase().includes(term);
+      const classified=Boolean(r.schedule)||r.nrx;
+      const ok=filter==="all"||(filter==="classified"&&classified)||(filter==="unclassified"&&!classified)||(filter==="legacy-rx"&&r.legacy_prescription);
+      return text&&ok;
+    });
+  },[rows,q,filter]);
+
+  const update=(id,key,value)=>setRows(rs=>rs.map(r=>r.id===id?{...r,[key]:value}:r));
+
+  async function save(r){
+    setSaving(r.id);setError("");setMessage("");
+    try{
+      const res=await fetch("/api/admin/regulatory-classification",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({medicine_id:r.id,schedule:r.schedule||null,nrx:Boolean(r.nrx),notes:r.notes||""})});
+      const d=await res.json();if(!res.ok||!d.success)throw new Error(d.error||"Unable to save.");
+      setMessage(`${r.name} saved.`);
+    }catch(e){setError(e.message||"Unable to save.");}finally{setSaving("")}
   }
 
-  if (loading) return <main style={styles.page}><div style={styles.card}>Loading admin dashboard…</div></main>;
-
-  return (
-    <main style={styles.page}>
-      <section style={styles.shell}>
-        <header style={styles.header}>
-          <div>
-            <div style={styles.kicker}>DHIMAN MEDICOS</div>
-            <h1 style={styles.title}>Admin Dashboard</h1>
-            <p style={styles.subtitle}>{user?.email || "Authenticated admin"}</p>
-          </div>
-          <button onClick={logout} disabled={signingOut} style={styles.logout}>
-            {signingOut ? "Signing out…" : "Sign out"}
-          </button>
-        </header>
-
-        <div style={styles.grid}>
-          <Link href="/pos" style={styles.tile}><span>🧾</span><strong>POS Billing</strong><small>Create sales and collect payments</small></Link>
-          <Link href="/inventory" style={styles.tile}><span>📦</span><strong>Inventory</strong><small>Manage stock and movements</small></Link>
-          <Link href="/sales" style={styles.tile}><span>📊</span><strong>Sales History</strong><small>Invoices, PDF and print</small></Link>
-          <Link href="/admin/orders" style={styles.tile}><span>🛍️</span><strong>Online Orders</strong><small>Review customer orders and fulfilment</small></Link>
-          <Link href="/" style={styles.tile}><span>🌐</span><strong>Storefront</strong><small>Open public website</small></Link>
+  return <main style={s.page}><div style={s.shell}>
+    <header style={s.head}>
+      <div style={s.kicker}>DHIMAN MEDICOS · ADMIN</div>
+      <h1 style={s.title}>Prescription Classification</h1>
+      <p style={s.muted}>Classify medicines using your verified pharmacy/regulatory records. Schedule H/H1 and NRx trigger prescription upload and pharmacist review.</p>
+    </header>
+    {error&&<div style={s.error}>{error}</div>}{message&&<div style={s.success}>{message}</div>}
+    <div style={s.toolbar}>
+      <input style={s.input} placeholder="Search medicine or category…" value={q} onChange={e=>setQ(e.target.value)}/>
+      <select style={s.input} value={filter} onChange={e=>setFilter(e.target.value)}>
+        <option value="all">All medicines</option><option value="classified">Classified H / H1 / NRx</option><option value="unclassified">Unclassified</option><option value="legacy-rx">Existing Rx flag</option>
+      </select>
+    </div>
+    {loading?<section style={s.card}>Loading medicines…</section>:<section style={s.card}>
+      <div style={s.count}>Showing {shown.length} of {rows.length}</div>
+      <div style={s.list}>{shown.map(r=><article key={r.id} style={s.row}>
+        <div style={s.info}><strong>{r.name}</strong><span>{r.category}</span>{r.legacy_prescription&&<small>Existing prescription flag</small>}</div>
+        <div style={s.controls}>
+          <select style={s.input} value={r.schedule||""} onChange={e=>update(r.id,"schedule",e.target.value||null)}>
+            <option value="">No H/H1</option><option value="H">Schedule H</option><option value="H1">Schedule H1</option>
+          </select>
+          <label style={s.check}><input type="checkbox" checked={Boolean(r.nrx)} onChange={e=>update(r.id,"nrx",e.target.checked)}/> NRx</label>
+          <input style={s.input} placeholder="Note" value={r.notes||""} onChange={e=>update(r.id,"notes",e.target.value)}/>
+          <button style={s.save} disabled={saving===r.id} onClick={()=>save(r)}>{saving===r.id?"Saving…":"Save"}</button>
         </div>
-
-        <div style={styles.security}><span>🛡️</span><div><strong>Admin protection enabled</strong><small>POS, inventory, sales and online-order management require an authenticated approved admin account.</small></div></div>
-      </section>
-    </main>
-  );
+      </article>)}</div>
+    </section>}
+  </div></main>
 }
 
-const styles = {
-  page: { minHeight: "100vh", padding: 20, background: "#f3f7f5", fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" },
-  shell: { width: "min(100%, 920px)", margin: "0 auto", padding: 28, background: "#fff", border: "1px solid #e2ebe6", borderRadius: 26, boxShadow: "0 20px 60px rgba(30,55,45,.10)" },
-  header: { display: "flex", justifyContent: "space-between", gap: 20, alignItems: "flex-start", marginBottom: 26 },
-  kicker: { fontSize: 11, letterSpacing: 2, fontWeight: 900, color: "#087f5b" },
-  title: { margin: "4px 0", fontSize: 30, color: "#17211d" },
-  subtitle: { margin: 0, color: "#718079", fontSize: 13 },
-  logout: { border: "1px solid #d8e2dd", background: "#fff", color: "#283630", borderRadius: 11, padding: "10px 14px", fontWeight: 800, cursor: "pointer" },
-  grid: { display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(190px,1fr))", gap: 14 },
-  tile: { textDecoration: "none", color: "inherit", display: "grid", gap: 7, padding: 20, borderRadius: 18, border: "1px solid #e1eae5", background: "linear-gradient(180deg,#fff,#f7faf8)", minHeight: 130 },
-  security: { marginTop: 20, display: "flex", gap: 12, alignItems: "flex-start", padding: 15, borderRadius: 15, background: "#eff9f4", color: "#145c47" },
-  card: { maxWidth: 500, margin: "15vh auto", padding: 30, background: "#fff", borderRadius: 20, textAlign: "center" },
+const s={
+  page:{minHeight:"100vh",padding:"24px 16px 50px",background:"#f3f8f5",fontFamily:"system-ui,sans-serif",color:"#17211d"},
+  shell:{maxWidth:1200,margin:"0 auto"},head:{background:"#fff",border:"1px solid #dfe8e2",borderRadius:20,padding:20,marginBottom:16},
+  kicker:{fontSize:11,letterSpacing:2,fontWeight:900,color:"#087f5b"},title:{margin:"5px 0",fontSize:"clamp(1.8rem,5vw,2.6rem)"},muted:{color:"#6d7b73",lineHeight:1.5},
+  toolbar:{display:"grid",gridTemplateColumns:"minmax(0,1fr) 260px",gap:10,marginBottom:16},input:{width:"100%",boxSizing:"border-box",padding:11,border:"1px solid #d7e1dc",borderRadius:11,background:"#fff",fontSize:14},
+  card:{background:"#fff",border:"1px solid #dfe8e2",borderRadius:20,padding:16},count:{color:"#6d7b73",fontSize:13,marginBottom:10},list:{display:"grid",gap:10},
+  row:{display:"grid",gridTemplateColumns:"minmax(220px,1fr) minmax(420px,2fr)",gap:14,alignItems:"center",padding:13,border:"1px solid #e3ebe7",borderRadius:14},
+  info:{display:"grid",gap:4},controls:{display:"grid",gridTemplateColumns:"140px 80px minmax(120px,1fr) 74px",gap:8,alignItems:"center"},
+  check:{fontSize:13,fontWeight:800,display:"flex",gap:5},save:{padding:11,border:0,borderRadius:10,background:"#087f5b",color:"#fff",fontWeight:900},
+  error:{padding:12,borderRadius:11,background:"#fff0ee",color:"#9b3c32",marginBottom:15},success:{padding:12,borderRadius:11,background:"#edf8f1",color:"#205d45",marginBottom:15}
 };
