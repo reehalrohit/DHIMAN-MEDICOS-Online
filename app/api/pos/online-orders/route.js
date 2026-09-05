@@ -39,9 +39,15 @@ export async function PATCH(request){
       if(!order.prescription_id)return NextResponse.json({success:false,error:"No prescription is attached to this order."},{status:400});
       const {error}=await supabaseAdmin.from("prescriptions").update({status:next,updated_at:new Date().toISOString()}).eq("id",order.prescription_id).eq("order_id",order.id);
       if(error)throw error;
-      const {error:oerr}=await supabaseAdmin.from("customer_orders").update({prescription_status:next,updated_at:new Date().toISOString()}).eq("id",order.id);
+      const changes={prescription_status:next,updated_at:new Date().toISOString()};
+      if(next==="rejected"){
+        const reason=String(body?.rejection_reason||"").trim().slice(0,1000);
+        if(reason.length<5)return NextResponse.json({success:false,error:"A rejection reason is required."},{status:400});
+        changes.rejection_reason=reason;
+      }
+      const {error:oerr}=await supabaseAdmin.from("customer_orders").update(changes).eq("id",order.id);
       if(oerr)throw oerr;
-      await supabaseAdmin.from("customer_order_events").insert({order_id:order.id,status:`prescription_${next}`,note:`Prescription marked ${next}.`});
+      await supabaseAdmin.from("customer_order_events").insert({order_id:order.id,status:`prescription_${next}`,note:next==="rejected"?`Prescription rejected: ${changes.rejection_reason}`:`Prescription marked ${next}.`});
       order=await loadOrder(id);
     }
 
@@ -49,20 +55,23 @@ export async function PATCH(request){
       const next=String(body.status);
       if(!ALLOWED_STATUS.has(next))return NextResponse.json({success:false,error:"Invalid order status."},{status:400});
       if(next==="confirmed"){
-        if(order.prescription_status!=="not_required"&&order.prescription_status!=="approved"){
-          return NextResponse.json({success:false,error:"Approve the prescription before accepting this order."},{status:409});
-        }
-        if(order.payment_method==="razorpay"&&order.payment_status!=="paid"){
-          return NextResponse.json({success:false,error:"Online payment has not been confirmed yet."},{status:409});
-        }
+        if(order.order_status!=="pending_review")return NextResponse.json({success:false,error:"Only orders awaiting review can be accepted."},{status:409});
+        if(order.prescription_status!=="not_required"&&order.prescription_status!=="approved")return NextResponse.json({success:false,error:"Approve the prescription before accepting this order."},{status:409});
+        if(order.payment_method==="razorpay"&&order.payment_status!=="paid")return NextResponse.json({success:false,error:"Online payment has not been confirmed yet."},{status:409});
         const rpc=await supabaseAdmin.rpc("confirm_customer_order",{p_order_id:id});
         if(rpc.error)throw rpc.error;
+      }else if(next==="rejected"){
+        const reason=String(body?.rejection_reason||"").trim().slice(0,1000);
+        if(reason.length<5)return NextResponse.json({success:false,error:"A rejection reason is required."},{status:400});
+        if(order.payment_status==="paid")return NextResponse.json({success:false,error:"This paid order requires refund handling before rejection."},{status:409});
+        const {error}=await supabaseAdmin.from("customer_orders").update({order_status:"rejected",rejection_reason:reason,updated_at:new Date().toISOString()}).eq("id",id);
+        if(error)throw error;
+        await supabaseAdmin.from("customer_order_events").insert({order_id:id,status:"rejected",note:`Order rejected: ${reason}`});
       }else{
-        if(["cancelled","rejected"].includes(next)&&order.payment_status==="paid")return NextResponse.json({success:false,error:"Paid orders require refund handling before cancellation or rejection."},{status:409});
         const {error}=await supabaseAdmin.from("customer_orders").update({order_status:next,updated_at:new Date().toISOString()}).eq("id",id);
         if(error)throw error;
+        await supabaseAdmin.from("customer_order_events").insert({order_id:id,status:next,note:`Order status changed to ${next}.`});
       }
-      await supabaseAdmin.from("customer_order_events").insert({order_id:id,status:next,note:next==="confirmed"?"Order accepted by pharmacy.":`Order status changed to ${next}.`});
     }
 
     return NextResponse.json({success:true,order:await loadOrder(id)});
