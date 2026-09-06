@@ -48,12 +48,10 @@ export default function AccountPage() {
     (async () => {
       try {
         const sb = getSupabaseBrowserClient();
-        const {
-          data: { user },
-          error: userError,
-        } = await sb.auth.getUser();
+        const { data: { user }, error: userError } = await sb.auth.getUser();
 
         if (userError) throw userError;
+
         if (!user) {
           router.replace("/login?next=/account");
           return;
@@ -70,6 +68,7 @@ export default function AccountPage() {
         if (!profileRes.ok || !profileData.success) {
           throw new Error(profileData.error || "Unable to load profile.");
         }
+
         if (!ordersRes.ok || !ordersData.success) {
           throw new Error(ordersData.error || "Unable to load orders.");
         }
@@ -91,9 +90,8 @@ export default function AccountPage() {
     };
   }, [router]);
 
-  const field = (key, value) => {
+  const field = (key, value) =>
     setProfile((current) => ({ ...current, [key]: value }));
-  };
 
   function useCurrentGps() {
     if (!navigator.geolocation) {
@@ -113,7 +111,7 @@ export default function AccountPage() {
           longitude: position.coords.longitude,
         }));
         setLocating(false);
-        setMessage("Current GPS location captured. Drag the pin if you need to fine-tune it, then save your profile.");
+        setMessage("GPS location captured. Save your profile to keep it.");
       },
       (gpsError) => {
         setLocating(false);
@@ -139,6 +137,7 @@ export default function AccountPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(profile),
       });
+
       const data = await response.json();
 
       if (!response.ok || !data.success) {
@@ -190,304 +189,225 @@ export default function AccountPage() {
 
   async function signOut() {
     await getSupabaseBrowserClient().auth.signOut();
-    router.replace("/online-order");
+    router.replace("/");
     router.refresh();
   }
 
   if (loading) {
     return (
       <main style={s.page}>
-        <section style={s.loadingCard}>Loading account…</section>
+        <section style={s.loadingCard}>Loading your account…</section>
       </main>
     );
   }
 
   return (
     <main style={s.page}>
-      <style jsx>{`
-        .accountGrid {
-          display: grid;
-          grid-template-columns: minmax(0, 1.7fr) minmax(280px, 0.8fr);
-          gap: 18px;
-        }
-        .profileTwo {
-          display: grid;
-          grid-template-columns: 1fr 1fr;
-          gap: 10px;
-        }
-        .profileThree {
-          display: grid;
-          grid-template-columns: 1fr 1fr 1fr;
-          gap: 10px;
-        }
-        @media (max-width: 760px) {
-          .accountGrid,
-          .profileTwo,
-          .profileThree {
-            grid-template-columns: 1fr;
-          }
-        }
-      `}</style>
-
       <div style={s.shell}>
-        <header style={s.header}>
+        <header style={s.topbar}>
+          <Link href="/online-order" style={s.back}>← Medicines</Link>
+          <button onClick={signOut} style={s.signOut}>Sign out</button>
+        </header>
+
+        <section style={s.hero}>
+          <div style={s.logo}>DM</div>
           <div>
             <div style={s.kicker}>DHIMAN MEDICOS</div>
             <h1 style={s.title}>My Account</h1>
             <p style={s.muted}>{user?.email}</p>
           </div>
-          <div style={s.actions}>
-            <Link href="/online-order" style={s.button}>
-              Order medicines
-            </Link>
-            <button onClick={signOut} style={s.button}>
-              Sign out
-            </button>
-          </div>
-        </header>
+        </section>
 
         {error && <div style={s.error}>{error}</div>}
         {message && <div style={s.success}>{message}</div>}
 
-        <div className="accountGrid">
-          <section style={s.section}>
-            <div style={s.kicker}>PROFILE</div>
-            <h2 style={s.h2}>Personal details</h2>
+        <section style={s.section}>
+          <div style={s.kicker}>PROFILE</div>
+          <h2 style={s.h2}>Personal details</h2>
 
-            <form onSubmit={save} style={s.form}>
-              <div className="profileTwo">
-                <label style={s.label}>
-                  Full name
-                  <input
-                    style={s.input}
-                    value={profile.full_name}
-                    onChange={(e) => field("full_name", e.target.value)}
-                    required
-                    autoComplete="name"
-                  />
-                </label>
+          <form onSubmit={save} style={s.form}>
+            <label style={s.label}>
+              Full name
+              <input
+                style={s.input}
+                value={profile.full_name}
+                onChange={(e) => field("full_name", e.target.value)}
+                autoComplete="name"
+                required
+              />
+            </label>
 
-                <label style={s.label}>
-                  Mobile number
-                  <input
-                    style={s.input}
-                    value={profile.phone}
-                    onChange={(e) => field("phone", e.target.value)}
-                    inputMode="tel"
-                    autoComplete="tel"
-                    required
-                  />
-                </label>
+            <label style={s.label}>
+              Mobile number
+              <input
+                style={s.input}
+                value={profile.phone}
+                onChange={(e) => field("phone", e.target.value)}
+                inputMode="tel"
+                autoComplete="tel"
+                required
+              />
+            </label>
+
+            <label style={s.label}>
+              Email
+              <input
+                style={{ ...s.input, background: "#f1f5f2" }}
+                value={user?.email || ""}
+                disabled
+              />
+            </label>
+
+            <div style={s.divider} />
+
+            <div>
+              <div style={s.kicker}>DELIVERY ADDRESS</div>
+              <div style={s.hint}>
+                Saved details prefill checkout. Home delivery still requires a
+                fresh GPS verification.
               </div>
+            </div>
 
+            <label style={s.label}>
+              Address
+              <input
+                style={s.input}
+                value={profile.address_line1}
+                onChange={(e) => field("address_line1", e.target.value)}
+                placeholder="House / street / village"
+                autoComplete="street-address"
+              />
+            </label>
+
+            <label style={s.label}>
+              Address line 2
+              <input
+                style={s.input}
+                value={profile.address_line2 || ""}
+                onChange={(e) => field("address_line2", e.target.value)}
+                placeholder="Area / apartment (optional)"
+              />
+            </label>
+
+            <label style={s.label}>
+              Landmark
+              <input
+                style={s.input}
+                value={profile.landmark || ""}
+                onChange={(e) => field("landmark", e.target.value)}
+                placeholder="Nearby landmark (optional)"
+              />
+            </label>
+
+            <div style={s.three}>
               <label style={s.label}>
-                Email
-                <input
-                  style={{ ...s.input, background: "#f2f5f2" }}
-                  value={user?.email || ""}
-                  disabled
-                />
-              </label>
-
-              <hr style={s.hr} />
-
-              <div>
-                <div style={s.kicker}>SAVED DELIVERY ADDRESS</div>
-                <div style={s.hint}>
-                  Saved details are used to prefill checkout. Home delivery
-                  still requires a fresh GPS check.
-                </div>
-              </div>
-
-              <label style={s.label}>
-                Address
+                City
                 <input
                   style={s.input}
-                  value={profile.address_line1}
-                  onChange={(e) => field("address_line1", e.target.value)}
-                  placeholder="House / street / village"
-                  autoComplete="street-address"
+                  value={profile.city}
+                  onChange={(e) => field("city", e.target.value)}
                 />
               </label>
 
               <label style={s.label}>
-                Address line 2
+                State
                 <input
                   style={s.input}
-                  value={profile.address_line2 || ""}
-                  onChange={(e) => field("address_line2", e.target.value)}
-                  placeholder="Area / apartment (optional)"
+                  value={profile.state}
+                  onChange={(e) => field("state", e.target.value)}
                 />
               </label>
 
               <label style={s.label}>
-                Landmark
+                PIN
                 <input
                   style={s.input}
-                  value={profile.landmark || ""}
-                  onChange={(e) => field("landmark", e.target.value)}
-                  placeholder="Nearby landmark (optional)"
+                  value={profile.pincode}
+                  onChange={(e) => field("pincode", e.target.value)}
+                  inputMode="numeric"
+                  maxLength={6}
                 />
               </label>
+            </div>
 
-              <div className="profileThree">
-                <label style={s.label}>
-                  City
-                  <input
-                    style={s.input}
-                    value={profile.city}
-                    onChange={(e) => field("city", e.target.value)}
-                  />
-                </label>
-                <label style={s.label}>
-                  State
-                  <input
-                    style={s.input}
-                    value={profile.state}
-                    onChange={(e) => field("state", e.target.value)}
-                  />
-                </label>
-                <label style={s.label}>
-                  PIN
-                  <input
-                    style={s.input}
-                    value={profile.pincode}
-                    onChange={(e) => field("pincode", e.target.value)}
-                    inputMode="numeric"
-                    maxLength={6}
-                  />
-                </label>
-              </div>
+            <section style={s.location}>
+              <strong>📍 Saved delivery location</strong>
+              <p style={s.hint}>
+                Save your preferred GPS point. Checkout will still verify the
+                customer's live location for the 2 km delivery rule.
+              </p>
 
-              <div style={s.location}>
-                <div style={s.locationHead}>
-                  <div>
-                    <strong>📍 Saved delivery pin</strong>
-                    <div style={s.hint}>
-                      Optional saved navigation point. It is not a substitute
-                      for the current GPS check during delivery checkout.
-                    </div>
-                  </div>
-                </div>
+              <DeliveryLocationPicker
+                value={
+                  profile.latitude != null && profile.longitude != null
+                    ? {
+                        latitude: profile.latitude,
+                        longitude: profile.longitude,
+                      }
+                    : null
+                }
+                onChange={(location) => {
+                  field("latitude", location.latitude);
+                  field("longitude", location.longitude);
+                }}
+                disabled={saving}
+              />
 
-                <div style={s.mapWrap}>
-                  <DeliveryLocationPicker
-                    value={
-                      profile.latitude != null && profile.longitude != null
-                        ? {
-                            latitude: profile.latitude,
-                            longitude: profile.longitude,
-                          }
-                        : null
-                    }
-                    onChange={(location) => {
-                      field("latitude", location.latitude);
-                      field("longitude", location.longitude);
-                    }}
-                    disabled={saving}
-                  />
-                </div>
-
-                <button
-                  type="button"
-                  onClick={useCurrentGps}
-                  disabled={locating || saving}
-                  style={s.secondary}
-                >
-                  {locating ? "Getting GPS location…" : "Use my current GPS"}
-                </button>
-              </div>
-
-              <button type="submit" disabled={saving} style={s.primary}>
-                {saving ? "Saving…" : "Save profile"}
+              <button
+                type="button"
+                onClick={useCurrentGps}
+                disabled={locating || saving}
+                style={s.secondary}
+              >
+                {locating ? "Getting GPS location…" : "Use my current GPS"}
               </button>
-            </form>
-          </section>
-
-          <aside style={s.side}>
-            <section style={s.section}>
-              <div style={s.kicker}>SECURITY</div>
-              <h2 style={s.h2}>Password</h2>
-
-              {!passwordOpen ? (
-                <button
-                  style={s.secondary}
-                  onClick={() => setPasswordOpen(true)}
-                >
-                  Change password
-                </button>
-              ) : (
-                <form onSubmit={changePassword} style={s.form}>
-                  <input
-                    name="password"
-                    type="password"
-                    minLength={6}
-                    placeholder="New password"
-                    autoComplete="new-password"
-                    style={s.input}
-                    required
-                  />
-                  <input
-                    name="confirm"
-                    type="password"
-                    minLength={6}
-                    placeholder="Confirm password"
-                    autoComplete="new-password"
-                    style={s.input}
-                    required
-                  />
-                  <button style={s.primary}>Update password</button>
-                </form>
-              )}
             </section>
 
-            <section style={s.section}>
-              <div style={s.kicker}>LEGAL</div>
-              <h2 style={s.h2}>Policies</h2>
-              <div style={s.links}>
-                <Link href="/privacy" style={s.button}>
-                  Privacy Policy
-                </Link>
-                <Link href="/terms" style={s.button}>
-                  Terms & Conditions
-                </Link>
-              </div>
-            </section>
-          </aside>
-        </div>
+            <button type="submit" disabled={saving} style={s.primary}>
+              {saving ? "Saving…" : "Save profile"}
+            </button>
+          </form>
+        </section>
 
-        <section style={{ ...s.section, marginTop: 18 }}>
-          <div style={s.kicker}>ORDERS</div>
-          <h2 style={s.h2}>My orders</h2>
+        <section style={s.section}>
+          <div style={s.kicker}>MY ORDERS</div>
+          <h2 style={s.h2}>Order history</h2>
 
           {!orders.length ? (
-            <div style={s.empty}>No online orders yet.</div>
+            <div style={s.empty}>
+              <div style={s.emptyIcon}>📦</div>
+              <strong>No online orders yet</strong>
+              <p style={s.hint}>Your orders will appear here.</p>
+              <Link href="/online-order" style={s.primaryLink}>
+                Start shopping
+              </Link>
+            </div>
           ) : (
-            <div style={s.list}>
+            <div style={s.orders}>
               {orders.map((order) => (
                 <article key={order.id} style={s.order}>
-                  <div style={s.row}>
-                    <strong>{order.order_number}</strong>
+                  <div style={s.orderTop}>
+                    <div>
+                      <strong>{order.order_number}</strong>
+                      <span style={s.small}>
+                        {new Date(order.created_at).toLocaleString("en-IN")}
+                      </span>
+                    </div>
                     <span style={s.badge}>
                       {labels[order.order_status] || order.order_status}
                     </span>
                   </div>
 
-                  <div style={s.meta}>
-                    Placed{" "}
-                    {new Date(order.created_at).toLocaleString("en-IN")}
-                  </div>
-
-                  <div style={s.row}>
+                  <div style={s.orderFacts}>
                     <span>
                       {order.delivery_method === "pickup"
-                        ? "Store pickup"
-                        : "Home delivery"}
+                        ? "🏪 Store pickup"
+                        : "🏠 Home delivery"}
                     </span>
                     <strong>₹{Number(order.total).toFixed(2)}</strong>
                   </div>
 
-                  <div style={s.meta}>
+                  <div style={s.small}>
                     {order.payment_method === "razorpay"
                       ? `Razorpay · ${order.payment_status}`
                       : "Pay on pickup"}
@@ -507,6 +427,48 @@ export default function AccountPage() {
             </div>
           )}
         </section>
+
+        <section style={s.section}>
+          <div style={s.kicker}>SECURITY</div>
+          <h2 style={s.h2}>Account security</h2>
+
+          {!passwordOpen ? (
+            <button
+              type="button"
+              style={s.secondary}
+              onClick={() => setPasswordOpen(true)}
+            >
+              Change password
+            </button>
+          ) : (
+            <form onSubmit={changePassword} style={s.form}>
+              <input
+                name="password"
+                type="password"
+                minLength={6}
+                placeholder="New password"
+                autoComplete="new-password"
+                style={s.input}
+                required
+              />
+              <input
+                name="confirm"
+                type="password"
+                minLength={6}
+                placeholder="Confirm password"
+                autoComplete="new-password"
+                style={s.input}
+                required
+              />
+              <button style={s.primary}>Update password</button>
+            </form>
+          )}
+        </section>
+
+        <footer style={s.footer}>
+          <Link href="/privacy" style={s.footerLink}>Privacy Policy</Link>
+          <Link href="/terms" style={s.footerLink}>Terms & Conditions</Link>
+        </footer>
       </div>
     </main>
   );
@@ -515,202 +477,90 @@ export default function AccountPage() {
 const s = {
   page: {
     minHeight: "100vh",
-    padding: "20px 16px 50px",
-    background: "#f3f8f5",
-    fontFamily: "system-ui,sans-serif",
-    color: "#17211d",
+    background: "#f4f8f5",
+    padding: "18px 14px 70px",
+    fontFamily: "Inter,system-ui,sans-serif",
+    color: "#15221b",
   },
-  shell: {
-    maxWidth: 1100,
-    margin: "0 auto",
-  },
-  loadingCard: {
-    maxWidth: 430,
-    margin: "20vh auto",
-    background: "white",
-    padding: 30,
-    borderRadius: 20,
-    textAlign: "center",
-  },
-  header: {
+  shell: { maxWidth: 760, margin: "0 auto" },
+  topbar: {
     display: "flex",
     justifyContent: "space-between",
-    gap: 15,
-    flexWrap: "wrap",
-    marginBottom: 18,
-    padding: 20,
-    background: "white",
-    border: "1px solid #dfe8e2",
-    borderRadius: 22,
-  },
-  title: {
-    fontSize: "clamp(1.8rem, 6vw, 2.5rem)",
-    margin: "5px 0",
-  },
-  grid: {},
-  side: {
-    display: "grid",
-    gap: 18,
-    alignContent: "start",
-  },
-  section: {
-    background: "white",
-    border: "1px solid #dfe8e2",
-    borderRadius: 20,
-    padding: "clamp(16px, 3vw, 22px)",
-    minWidth: 0,
-  },
-  kicker: {
-    fontSize: 11,
-    letterSpacing: 2,
-    fontWeight: 900,
-    color: "#087f5b",
-  },
-  h2: {
-    fontSize: 20,
-    margin: "5px 0 16px",
-  },
-  muted: {
-    color: "#6d7b73",
-  },
-  hint: {
-    fontSize: 12,
-    color: "#748078",
-    lineHeight: 1.45,
-    marginTop: 5,
-  },
-  form: {
-    display: "grid",
-    gap: 12,
-  },
-  label: {
-    display: "grid",
-    gap: 6,
-    fontSize: 13,
-    fontWeight: 700,
-  },
-  input: {
-    width: "100%",
-    minWidth: 0,
-    boxSizing: "border-box",
-    padding: 12,
-    border: "1px solid #d7e1dc",
-    borderRadius: 11,
-    fontSize: 15,
-    background: "#fff",
-  },
-  location: {
-    padding: 13,
-    borderRadius: 14,
-    border: "1px solid #dfe8e2",
-    background: "#f7faf8",
-    display: "grid",
-    gap: 10,
-  },
-  locationHead: {
-    display: "flex",
-    justifyContent: "space-between",
-    gap: 12,
-  },
-  mapWrap: {
-    width: "100%",
-    overflow: "hidden",
-    borderRadius: 14,
-  },
-  row: {
-    display: "flex",
-    justifyContent: "space-between",
-    gap: 10,
     alignItems: "center",
-    flexWrap: "wrap",
+    marginBottom: 12,
   },
-  actions: {
-    display: "flex",
-    gap: 8,
-    flexWrap: "wrap",
-  },
-  links: {
-    display: "grid",
-    gap: 8,
-  },
-  button: {
-    padding: "10px 13px",
-    border: "1px solid #d6e0da",
-    borderRadius: 10,
-    background: "white",
-    color: "inherit",
-    textDecoration: "none",
+  back: { color: "#075f46", fontWeight: 900, textDecoration: "none" },
+  signOut: {
+    border: "1px solid #d4e0d9",
+    background: "#fff",
+    borderRadius: 11,
+    padding: "9px 12px",
     fontWeight: 800,
-    textAlign: "center",
+  },
+  hero: {
+    background: "#075f46",
+    color: "#fff",
+    borderRadius: 22,
+    padding: 20,
+    display: "flex",
+    gap: 14,
+    alignItems: "center",
+    boxShadow: "0 14px 38px rgba(7,95,70,.16)",
+  },
+  logo: {
+    width: 58, height: 58, borderRadius: 18, display: "grid",
+    placeItems: "center", background: "#0a7657", fontWeight: 900, fontSize: 22,
+  },
+  kicker: { fontSize: 11, letterSpacing: 2, fontWeight: 900, color: "#07805c" },
+  title: { margin: "4px 0 3px", fontSize: 34, letterSpacing: "-.035em" },
+  muted: { margin: 0, color: "#bfe0d2", lineHeight: 1.5 },
+  section: {
+    background: "#fff",
+    border: "1px solid #dfe8e2",
+    borderRadius: 18,
+    padding: 17,
+    marginTop: 14,
+  },
+  h2: { margin: "5px 0 14px", fontSize: 22 },
+  form: { display: "grid", gap: 11 },
+  label: { display: "grid", gap: 6, fontSize: 12, fontWeight: 800, color: "#526158" },
+  input: {
+    width: "100%", boxSizing: "border-box", padding: "12px 13px",
+    border: "1px solid #d5e0d9", borderRadius: 11, background: "#fff", fontSize: 16,
+  },
+  three: { display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 9 },
+  divider: { height: 1, background: "#e5ece8", margin: "5px 0" },
+  hint: { margin: "4px 0 0", fontSize: 12, color: "#748078", lineHeight: 1.45 },
+  location: {
+    padding: 13, borderRadius: 13, background: "#f2f7f4",
+    border: "1px solid #dbe7e0",
   },
   primary: {
-    padding: 13,
-    border: 0,
-    borderRadius: 12,
-    background: "#087f5b",
-    color: "white",
-    fontWeight: 900,
-    fontSize: 15,
-    width: "100%",
+    border: 0, borderRadius: 12, padding: "13px 14px",
+    background: "#07805c", color: "#fff", fontWeight: 900, fontSize: 15,
+  },
+  primaryLink: {
+    display: "inline-flex", marginTop: 8, padding: "11px 13px",
+    borderRadius: 11, background: "#07805c", color: "#fff",
+    textDecoration: "none", fontWeight: 900,
   },
   secondary: {
-    padding: 11,
-    border: "1px solid #d6e0da",
-    borderRadius: 10,
-    background: "white",
-    fontWeight: 800,
-    width: "100%",
+    width: "100%", marginTop: 9, border: "1px solid #cfded6",
+    borderRadius: 11, padding: "11px 12px", background: "#fff",
+    fontWeight: 800, color: "#075f46",
   },
-  hr: {
-    border: 0,
-    borderTop: "1px solid #e5ece8",
-    margin: "4px 0",
-  },
-  badge: {
-    padding: "5px 9px",
-    borderRadius: 999,
-    background: "#eff7f1",
-    color: "#126547",
-    fontSize: 12,
-    fontWeight: 800,
-  },
-  list: {
-    display: "grid",
-    gap: 12,
-  },
-  order: {
-    border: "1px solid #e1eae5",
-    borderRadius: 16,
-    padding: 16,
-    background: "#fff",
-  },
-  meta: {
-    fontSize: 12,
-    color: "#748078",
-    margin: "6px 0 12px",
-  },
-  track: {
-    color: "#087f5b",
-    fontWeight: 900,
-    textDecoration: "none",
-  },
-  empty: {
-    padding: 30,
-    textAlign: "center",
-    color: "#77847c",
-  },
-  error: {
-    padding: 12,
-    borderRadius: 11,
-    background: "#fff0ee",
-    color: "#9b3c32",
-    marginBottom: 15,
-  },
-  success: {
-    padding: 12,
-    borderRadius: 11,
-    background: "#edf8f1",
-    color: "#205d45",
-    marginBottom: 15,
-  },
+  error: { marginTop: 12, padding: 11, borderRadius: 11, background: "#fff0ee", color: "#963d34" },
+  success: { marginTop: 12, padding: 11, borderRadius: 11, background: "#eef8f2", color: "#185f45" },
+  orders: { display: "grid", gap: 10 },
+  order: { border: "1px solid #e1e9e4", borderRadius: 14, padding: 13 },
+  orderTop: { display: "flex", justifyContent: "space-between", gap: 10, alignItems: "flex-start" },
+  orderFacts: { display: "flex", justifyContent: "space-between", gap: 10, marginTop: 11 },
+  badge: { padding: "5px 8px", borderRadius: 999, background: "#eff7f2", color: "#126447", fontSize: 11, fontWeight: 900 },
+  small: { display: "block", marginTop: 4, fontSize: 11, color: "#77847d" },
+  track: { display: "inline-block", marginTop: 10, color: "#075f46", textDecoration: "none", fontWeight: 900, fontSize: 13 },
+  empty: { textAlign: "center", padding: "25px 8px" },
+  emptyIcon: { fontSize: 34, marginBottom: 7 },
+  footer: { display: "flex", justifyContent: "center", gap: 20, padding: "24px 0 0" },
+  footerLink: { color: "#617068", textDecoration: "none", fontSize: 13, fontWeight: 700 },
+  loadingCard: { maxWidth: 420, margin: "20vh auto", background: "#fff", padding: 28, borderRadius: 18, textAlign: "center" },
 };
