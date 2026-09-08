@@ -32,6 +32,7 @@ jobs:
         run: |
           git config user.name "Dhiman Medicos Bot"
           git config user.email "reehalrohit@users.noreply.github.com"
+
           git fetch origin main
           git reset --hard origin/main
 
@@ -45,39 +46,54 @@ jobs:
       - name: Verify Supabase secrets
         if: steps.check.outputs.csv_count != '0'
         run: |
-          test -n "$SUPABASE_URL" || { echo "❌ SUPABASE_URL secret is missing"; exit 1; }
-          test -n "$SUPABASE_SERVICE_ROLE_KEY" || { echo "❌ SUPABASE_SERVICE_ROLE_KEY secret is missing"; exit 1; }
+          if [ -z "$SUPABASE_URL" ]; then
+            echo "❌ SUPABASE_URL secret is missing"
+            exit 1
+          fi
+
+          if [ -z "$SUPABASE_SERVICE_ROLE_KEY" ]; then
+            echo "❌ SUPABASE_SERVICE_ROLE_KEY secret is missing"
+            exit 1
+          fi
+
           echo "✓ Supabase secrets are configured"
 
       - name: Process invoice CSVs
         if: steps.check.outputs.csv_count != '0'
-        run: python3 .github/scripts/process-invoice.py
+        run: |
+          python3 .github/scripts/process-invoice.py
 
       - name: Cleanup duplicates
         if: steps.check.outputs.csv_count != '0'
-        run: python3 .github/scripts/cleanup_duplicates.py
+        run: |
+          python3 .github/scripts/cleanup_duplicates.py
 
       - name: Validate catalog
         if: steps.check.outputs.csv_count != '0'
-        run: python3 .github/scripts/validate_catalog.py
+        run: |
+          python3 .github/scripts/validate_catalog.py
 
       - name: Verify JS syntax
         if: steps.check.outputs.csv_count != '0'
-        run: node --check lib/medicines.js
+        run: |
+          node --check lib/medicines.js
 
       - name: Remove generated duplicate report
         if: steps.check.outputs.csv_count != '0'
-        run: rm -f duplicates-report.txt
+        run: |
+          rm -f duplicates-report.txt
 
       - name: Confirm main did not change during processing
         if: steps.check.outputs.csv_count != '0'
         run: |
           git fetch origin main
+
           if [ "$(git rev-parse HEAD)" != "$(git rev-parse origin/main)" ]; then
             echo "❌ main changed while the invoice was being processed."
             echo "Re-run the workflow; processing is idempotent."
             exit 1
           fi
+
           echo "✓ main is unchanged; safe to commit"
 
       - name: Commit updated catalog and invoice history
@@ -92,8 +108,8 @@ jobs:
           fi
 
           ADDED=$(git diff --staged lib/medicines.js | grep '^+.*name:' | wc -l || true)
+
           git commit -m "Auto-update catalog and inventory from invoice (+${ADDED} medicines)"
 
-          # Keep the origin configured by actions/checkout.
-          # This avoids pushing to a hard-coded/wrong repository URL.
+          # Keep the repository origin created by actions/checkout.
           git push origin HEAD:main
