@@ -19,15 +19,11 @@ function parseExpiry(value) {
 
 function discountFor(mrp, offer, now) {
   if (!offer?.is_generic || !offer?.active) return 0;
-
   if (offer.starts_at && new Date(offer.starts_at) > now) return 0;
   if (offer.ends_at && new Date(offer.ends_at) < now) return 0;
 
   const value = Math.max(0, Number(offer.discount_value || 0));
-  const raw =
-    offer.discount_type === "flat"
-      ? value
-      : (mrp * value) / 100;
+  const raw = offer.discount_type === "flat" ? value : (mrp * value) / 100;
 
   return Math.round(Math.min(mrp, Math.max(0, raw)) * 100) / 100;
 }
@@ -43,17 +39,12 @@ export async function GET() {
   try {
     const [
       { data: batches, error: batchError },
-      { data: inventory, error: inventoryError },
       { data: classes, error: classError },
       { data: offers, error: offerError },
     ] = await Promise.all([
       supabaseAdmin
         .from("inventory_batches")
         .select("medicine_id,quantity,expiry")
-        .gt("quantity", 0),
-      supabaseAdmin
-        .from("inventory")
-        .select("medicine_id,quantity")
         .gt("quantity", 0),
       supabaseAdmin
         .from("medicine_regulatory_classification")
@@ -66,7 +57,6 @@ export async function GET() {
     ]);
 
     if (batchError) throw batchError;
-    if (inventoryError) throw inventoryError;
     if (classError) throw classError;
     if (offerError) throw offerError;
 
@@ -81,12 +71,8 @@ export async function GET() {
     today.setHours(0, 0, 0, 0);
     const now = new Date();
 
-    // Authoritative sellable quantity:
-    // 1) valid, non-expired inventory_batches
-    // 2) inventory fallback only when no batch rows exist for that medicine
-    const batchIds = new Set(
-      (batches || []).map((r) => String(r.medicine_id))
-    );
+    // inventory_batches is the authoritative sellable source because final
+    // POS checkout allocates a real batch using FEFO.
     const sellable = new Map();
 
     for (const batch of batches || []) {
@@ -95,14 +81,6 @@ export async function GET() {
 
       const id = String(batch.medicine_id);
       sellable.set(id, (sellable.get(id) || 0) + Number(batch.quantity || 0));
-    }
-
-    for (const row of inventory || []) {
-      const id = String(row.medicine_id);
-      if (batchIds.has(id)) continue;
-
-      const quantity = Number(row.quantity || 0);
-      if (quantity > 0) sellable.set(id, quantity);
     }
 
     const products = [];
@@ -121,21 +99,13 @@ export async function GET() {
         const legacy = Boolean(medicine.prescription);
         const regulatory = classMap.get(id);
         const offer = offerMap.get(id);
-
         const schedule = regulatory?.schedule || null;
         const nrx = Boolean(regulatory?.nrx);
-        const prescriptionRequired =
-          Boolean(schedule) || nrx || legacy;
+        const prescriptionRequired = Boolean(schedule) || nrx || legacy;
 
         const discountAmount = discountFor(mrp, offer, now);
-        const sellingPrice = Math.round(
-          (mrp - discountAmount) * 100
-        ) / 100;
-
-        const availableQuantity = Math.max(
-          0,
-          Number(sellable.get(id) || 0)
-        );
+        const sellingPrice = Math.round((mrp - discountAmount) * 100) / 100;
+        const availableQuantity = Math.max(0, Number(sellable.get(id) || 0));
 
         products.push({
           id,
@@ -147,8 +117,7 @@ export async function GET() {
             ? Math.round((discountAmount * 100) / mrp)
             : 0,
           discount_eligible:
-            Boolean(offer?.is_generic) &&
-            Boolean(offer?.active),
+            Boolean(offer?.is_generic) && Boolean(offer?.active),
           is_generic: Boolean(offer?.is_generic),
           category_id: category.id,
           category: category.name,
@@ -157,11 +126,7 @@ export async function GET() {
           prescription_required: prescriptionRequired,
           schedule,
           nrx,
-          prescription_label: prescriptionLabel(
-            schedule,
-            nrx,
-            legacy
-          ),
+          prescription_label: prescriptionLabel(schedule, nrx, legacy),
           available_quantity: availableQuantity,
           in_stock: availableQuantity > 0,
         });
