@@ -116,5 +116,5 @@ jobs:
 
           git commit -m "Auto-update catalog and inventory from invoice (+${ADDED} medicines)"
 
-          git remote set-url origin https://x-access-token:${TOKEN}@github.com/reehalrohit/DHIMAN-MEDICOS.git
+          git remote set-url origin https://x-access-token:${TOKEN}@github.com/reehalrohit/DHIMAN-MEDICOS-Online.git
           git push origin HEAD:main
