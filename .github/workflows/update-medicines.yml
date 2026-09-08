@@ -6,8 +6,6 @@ on:
       - "invoices/**"
   workflow_dispatch:
 
-# Only one catalog update is allowed to run at a time. This prevents two
-# invoice-processing runs from racing against each other on main.
 concurrency:
   group: update-medicines-main
   cancel-in-progress: false
@@ -28,9 +26,8 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          token: ${{ secrets.BOT_TOKEN || secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.GITHUB_TOKEN }}
 
-      # Start from the newest main before touching any generated files.
       - name: Sync with main
         run: |
           git config user.name "Dhiman Medicos Bot"
@@ -48,16 +45,8 @@ jobs:
       - name: Verify Supabase secrets
         if: steps.check.outputs.csv_count != '0'
         run: |
-          if [ -z "$SUPABASE_URL" ]; then
-            echo "❌ SUPABASE_URL secret is missing"
-            exit 1
-          fi
-
-          if [ -z "$SUPABASE_SERVICE_ROLE_KEY" ]; then
-            echo "❌ SUPABASE_SERVICE_ROLE_KEY secret is missing"
-            exit 1
-          fi
-
+          test -n "$SUPABASE_URL" || { echo "❌ SUPABASE_URL secret is missing"; exit 1; }
+          test -n "$SUPABASE_SERVICE_ROLE_KEY" || { echo "❌ SUPABASE_SERVICE_ROLE_KEY secret is missing"; exit 1; }
           echo "✓ Supabase secrets are configured"
 
       - name: Process invoice CSVs
@@ -76,33 +65,23 @@ jobs:
         if: steps.check.outputs.csv_count != '0'
         run: node --check lib/medicines.js
 
-      # Never stage duplicates-report.txt. It is a generated diagnostic file
-      # and has previously caused modify/delete rebase conflicts.
       - name: Remove generated duplicate report
         if: steps.check.outputs.csv_count != '0'
         run: rm -f duplicates-report.txt
 
-      # Do not rebase after changing medicines.js. A remote change during the
-      # processing window would otherwise create a merge conflict. The check
-      # below fails safely; the next run is idempotent because Supabase records
-      # each processed invoice line with a unique source_key.
       - name: Confirm main did not change during processing
         if: steps.check.outputs.csv_count != '0'
         run: |
           git fetch origin main
-
           if [ "$(git rev-parse HEAD)" != "$(git rev-parse origin/main)" ]; then
             echo "❌ main changed while the invoice was being processed."
-            echo "The run is stopping before commit/push. Re-running is safe and idempotent."
+            echo "Re-run the workflow; processing is idempotent."
             exit 1
           fi
-
           echo "✓ main is unchanged; safe to commit"
 
       - name: Commit updated catalog and invoice history
         if: steps.check.outputs.csv_count != '0'
-        env:
-          TOKEN: ${{ secrets.BOT_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
           git add lib/medicines.js
           git add .github/processed-invoices.json 2>/dev/null || true
@@ -113,8 +92,8 @@ jobs:
           fi
 
           ADDED=$(git diff --staged lib/medicines.js | grep '^+.*name:' | wc -l || true)
-
           git commit -m "Auto-update catalog and inventory from invoice (+${ADDED} medicines)"
 
-          git remote set-url origin https://x-access-token:${TOKEN}@github.com/reehalrohit/DHIMAN-MEDICOS-Online.git
+          # Keep the origin configured by actions/checkout.
+          # This avoids pushing to a hard-coded/wrong repository URL.
           git push origin HEAD:main
