@@ -11,12 +11,28 @@ function parseExpiry(value) {
   let m = t.match(/^(\d{2})-(\d{2})-(\d{2})$/);
   if (m) return new Date(Number(`20${m[3]}`), Number(m[2]) - 1, Number(m[1]));
   m = t.match(/^(\d{2})-(\d{2})-(\d{4})$/);
-  if (m) return new Date(Number(m[4]), Number(m[2]) - 1, Number(m[1]));
+  if (m) return new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1]));
   m = t.match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if (m) return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
   return null;
 }
-function label(schedule, nrx, legacy) {
+
+function discountFor(mrp, offer, now) {
+  if (!offer?.is_generic || !offer?.active) return 0;
+
+  if (offer.starts_at && new Date(offer.starts_at) > now) return 0;
+  if (offer.ends_at && new Date(offer.ends_at) < now) return 0;
+
+  const value = Math.max(0, Number(offer.discount_value || 0));
+  const raw =
+    offer.discount_type === "flat"
+      ? value
+      : (mrp * value) / 100;
+
+  return Math.round(Math.min(mrp, Math.max(0, raw)) * 100) / 100;
+}
+
+function prescriptionLabel(schedule, nrx, legacy) {
   if (nrx && schedule) return `Schedule ${schedule} · NRx · Prescription`;
   if (nrx) return "NRx · Prescription";
   if (schedule) return `Schedule ${schedule} · Prescription`;
@@ -31,10 +47,22 @@ export async function GET() {
       { data: classes, error: classError },
       { data: offers, error: offerError },
     ] = await Promise.all([
-      supabaseAdmin.from("inventory_batches").select("medicine_id,quantity,expiry").gt("quantity", 0),
-      supabaseAdmin.from("inventory").select("medicine_id,quantity").gt("quantity", 0),
-      supabaseAdmin.from("medicine_regulatory_classification").select("medicine_id,schedule,nrx"),
-      supabaseAdmin.from("medicine_offer_rules").select("medicine_id,is_generic,discount_type,discount_value,active,starts_at,ends_at"),
+      supabaseAdmin
+        .from("inventory_batches")
+        .select("medicine_id,quantity,expiry")
+        .gt("quantity", 0),
+      supabaseAdmin
+        .from("inventory")
+        .select("medicine_id,quantity")
+        .gt("quantity", 0),
+      supabaseAdmin
+        .from("medicine_regulatory_classification")
+        .select("medicine_id,schedule,nrx"),
+      supabaseAdmin
+        .from("medicine_offer_rules")
+        .select(
+          "medicine_id,is_generic,discount_type,discount_value,active,starts_at,ends_at"
+        ),
     ]);
 
     if (batchError) throw batchError;
@@ -42,25 +70,37 @@ export async function GET() {
     if (classError) throw classError;
     if (offerError) throw offerError;
 
-    const classMap = new Map((classes || []).map((r) => [String(r.medicine_id), r]));
-    const offerMap = new Map((offers || []).map((r) => [String(r.medicine_id), r]));
+    const classMap = new Map(
+      (classes || []).map((r) => [String(r.medicine_id), r])
+    );
+    const offerMap = new Map(
+      (offers || []).map((r) => [String(r.medicine_id), r])
+    );
+
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     const now = new Date();
 
-    const batchIds = new Set((batches || []).map((r) => String(r.medicine_id)));
+    // Authoritative sellable quantity:
+    // 1) valid, non-expired inventory_batches
+    // 2) inventory fallback only when no batch rows exist for that medicine
+    const batchIds = new Set(
+      (batches || []).map((r) => String(r.medicine_id))
+    );
     const sellable = new Map();
 
-    for (const b of batches || []) {
-      const expiry = parseExpiry(b.expiry);
+    for (const batch of batches || []) {
+      const expiry = parseExpiry(batch.expiry);
       if (expiry && expiry < today) continue;
-      const id = String(b.medicine_id);
-      sellable.set(id, (sellable.get(id) || 0) + Number(b.quantity || 0));
+
+      const id = String(batch.medicine_id);
+      sellable.set(id, (sellable.get(id) || 0) + Number(batch.quantity || 0));
     }
 
     for (const row of inventory || []) {
       const id = String(row.medicine_id);
       if (batchIds.has(id)) continue;
+
       const quantity = Number(row.quantity || 0);
       if (quantity > 0) sellable.set(id, quantity);
     }
@@ -79,32 +119,23 @@ export async function GET() {
         seen.add(id);
 
         const legacy = Boolean(medicine.prescription);
-        const c = classMap.get(id);
-        const o = offerMap.get(id);
+        const regulatory = classMap.get(id);
+        const offer = offerMap.get(id);
 
-        const schedule = c?.schedule || null;
-        const nrx = Boolean(c?.nrx);
-        const prescriptionRequired = Boolean(schedule) || nrx || legacy;
+        const schedule = regulatory?.schedule || null;
+        const nrx = Boolean(regulatory?.nrx);
+        const prescriptionRequired =
+          Boolean(schedule) || nrx || legacy;
 
-        const windowOpen = Boolean(o?.active)
-          && (!o?.starts_at || new Date(o.starts_at) <= now)
-          && (!o?.ends_at || new Date(o.ends_at) >= now);
+        const discountAmount = discountFor(mrp, offer, now);
+        const sellingPrice = Math.round(
+          (mrp - discountAmount) * 100
+        ) / 100;
 
-        const generic = Boolean(o?.is_generic);
-
-        let discountAmount = 0;
-
-        if (generic && windowOpen) {
-          if (o.discount_type === "percent") {
-            discountAmount = mrp * Number(o.discount_value || 0) / 100;
-          } else {
-            discountAmount = Number(o.discount_value || 0);
-          }
-          discountAmount = Math.min(mrp, Math.max(0, discountAmount));
-        }
-
-        discountAmount = Math.round(discountAmount * 100) / 100;
-        const sellingPrice = Math.round((mrp - discountAmount) * 100) / 100;
+        const availableQuantity = Math.max(
+          0,
+          Number(sellable.get(id) || 0)
+        );
 
         products.push({
           id,
@@ -112,9 +143,13 @@ export async function GET() {
           mrp,
           selling_price: sellingPrice,
           discount_amount: discountAmount,
-          discount_percent: mrp ? Math.round(discountAmount * 100 / mrp) : 0,
-          discount_eligible: generic,
-          is_generic: generic,
+          discount_percent: mrp
+            ? Math.round((discountAmount * 100) / mrp)
+            : 0,
+          discount_eligible:
+            Boolean(offer?.is_generic) &&
+            Boolean(offer?.active),
+          is_generic: Boolean(offer?.is_generic),
           category_id: category.id,
           category: category.name,
           category_icon: category.icon,
@@ -122,8 +157,13 @@ export async function GET() {
           prescription_required: prescriptionRequired,
           schedule,
           nrx,
-          prescription_label: label(schedule, nrx, legacy),
-          in_stock: (sellable.get(id) || 0) > 0,
+          prescription_label: prescriptionLabel(
+            schedule,
+            nrx,
+            legacy
+          ),
+          available_quantity: availableQuantity,
+          in_stock: availableQuantity > 0,
         });
       }
     }
@@ -135,7 +175,10 @@ export async function GET() {
   } catch (error) {
     console.error("Online catalog error:", error);
     return NextResponse.json(
-      { success: false, error: error?.message || "Unable to load online catalog." },
+      {
+        success: false,
+        error: error?.message || "Unable to load online catalog.",
+      },
       { status: 500 }
     );
   }
