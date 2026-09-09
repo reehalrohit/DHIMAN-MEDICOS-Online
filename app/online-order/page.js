@@ -1317,17 +1317,36 @@ export default function OnlineOrderPage() {
                   }
                 />
               )}
-
+{form.delivery === "delivery" && total < 199 && (
+  <div
+    style={{
+      marginTop: 12,
+      marginBottom: 12,
+      padding: "12px 14px",
+      borderRadius: 10,
+      background: "#fff1f2",
+      border: "1px solid #fca5a5",
+      color: "#b91c1c",
+      fontWeight: 700,
+      fontSize: 14,
+      lineHeight: 1.45,
+    }}
+  >
+    ⚠️ Minimum order for home delivery is ₹199.
+    {" "}Add ₹{(199 - total).toFixed(2)} more to continue.
+  </div>
+)}
               <button
                 type="button"
                 onClick={
                   placeOrder
                 }
                 disabled={
-                  placing ||
-                  (form.delivery ===
-                    "delivery" &&
-                    !location)
+  placing ||
+  !cartItems.length ||
+  (form.delivery === "delivery" && !location) ||
+  (form.delivery === "delivery" && total < 199)
+              }
                 }
                 style={{
                   ...styles.primary,
