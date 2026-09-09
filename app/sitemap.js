@@ -1,7 +1,7 @@
 export default function sitemap() {
   return [
     {
-      url: "https://dhiman-medicos.vercel.app",
+      url: "https://dhiman-medicos-online.vercel.app",
       lastModified: new Date(),
     },
   ];
