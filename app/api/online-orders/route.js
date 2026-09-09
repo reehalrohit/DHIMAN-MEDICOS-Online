@@ -25,6 +25,7 @@ function parseExpiry(value) {
   const text = String(value).trim();
 
   let match = text.match(/^(\d{2})-(\d{2})-(\d{2})$/);
+
   if (match) {
     return new Date(
       Number(`20${match[3]}`),
@@ -34,6 +35,7 @@ function parseExpiry(value) {
   }
 
   match = text.match(/^(\d{2})-(\d{2})-(\d{4})$/);
+
   if (match) {
     return new Date(
       Number(match[3]),
@@ -43,6 +45,7 @@ function parseExpiry(value) {
   }
 
   match = text.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+
   if (match) {
     return new Date(
       Number(match[1]),
@@ -94,6 +97,7 @@ export async function POST(request) {
 
   try {
     const authResponse = NextResponse.next();
+
     const supabaseAuth = createServerClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL,
       process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
@@ -102,6 +106,7 @@ export async function POST(request) {
           getAll() {
             return request.cookies.getAll();
           },
+
           setAll() {},
         },
       }
@@ -112,13 +117,16 @@ export async function POST(request) {
       error: authError,
     } = await supabaseAuth.auth.getUser();
 
-    if (authError) throw authError;
+    if (authError) {
+      throw authError;
+    }
 
     if (!user) {
       return NextResponse.json(
         {
           success: false,
-          error: "Customer authentication required.",
+          error:
+            "Customer authentication required.",
         },
         { status: 401 }
       );
@@ -137,7 +145,8 @@ export async function POST(request) {
       return NextResponse.json(
         {
           success: false,
-          error: "Cart is empty or too large.",
+          error:
+            "Cart is empty or too large.",
         },
         { status: 400 }
       );
@@ -149,7 +158,9 @@ export async function POST(request) {
         : "delivery";
 
     const requestedPayment =
-      String(body?.payment_method || "").trim();
+      String(
+        body?.payment_method || ""
+      ).trim();
 
     const paymentMethod =
       requestedPayment === "upi_manual"
@@ -162,7 +173,8 @@ export async function POST(request) {
       return NextResponse.json(
         {
           success: false,
-          error: "Please select a payment method.",
+          error:
+            "Please select a payment method.",
         },
         { status: 400 }
       );
@@ -201,7 +213,8 @@ export async function POST(request) {
       return NextResponse.json(
         {
           success: false,
-          error: "Please enter your name.",
+          error:
+            "Please enter your name.",
         },
         { status: 400 }
       );
@@ -341,51 +354,84 @@ export async function POST(request) {
       );
     }
 
-    const ids = [...quantities.keys()];
+    const ids = [
+      ...quantities.keys(),
+    ];
 
     const [
-      { data: batches, error: batchError },
-      { data: inventory, error: inventoryError },
+      {
+        data: batches,
+        error: batchError,
+      },
+      {
+        data: inventory,
+        error: inventoryError,
+      },
     ] = await Promise.all([
       supabaseAdmin
-        .from("inventory_batches")
+        .from(
+          "inventory_batches"
+        )
         .select(
           "medicine_id,quantity,expiry"
         )
-        .in("medicine_id", ids)
-        .gt("quantity", 0),
+        .in(
+          "medicine_id",
+          ids
+        )
+        .gt(
+          "quantity",
+          0
+        ),
 
       supabaseAdmin
         .from("inventory")
         .select(
           "medicine_id,quantity"
         )
-        .in("medicine_id", ids)
-        .gt("quantity", 0),
+        .in(
+          "medicine_id",
+          ids
+        )
+        .gt(
+          "quantity",
+          0
+        ),
     ]);
 
-    if (batchError)
+    if (batchError) {
       throw batchError;
+    }
 
-    if (inventoryError)
+    if (inventoryError) {
       throw inventoryError;
+    }
 
     const batchMedicineIds =
       new Set(
-        (batches || []).map((row) =>
-          String(row.medicine_id)
+        (batches || []).map(
+          (row) =>
+            String(
+              row.medicine_id
+            )
         )
       );
 
     const stock = new Map();
 
     const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    today.setHours(
+      0,
+      0,
+      0,
+      0
+    );
 
     for (const batch of batches || []) {
-      const expiry = parseExpiry(
-        batch.expiry
-      );
+      const expiry =
+        parseExpiry(
+          batch.expiry
+        );
 
       if (
         expiry &&
@@ -395,7 +441,9 @@ export async function POST(request) {
       }
 
       const id =
-        String(batch.medicine_id);
+        String(
+          batch.medicine_id
+        );
 
       stock.set(
         id,
@@ -414,9 +462,13 @@ export async function POST(request) {
      * If batch rows exist but are all expired,
      * do NOT bypass expiry by using aggregate stock.
      */
-    for (const row of inventory || []) {
+    for (
+      const row of inventory || []
+    ) {
       const id =
-        String(row.medicine_id);
+        String(
+          row.medicine_id
+        );
 
       if (
         batchMedicineIds.has(id)
@@ -426,13 +478,16 @@ export async function POST(request) {
 
       stock.set(
         id,
-        Number(row.quantity || 0)
+        Number(
+          row.quantity || 0
+        )
       );
     }
 
     let subtotal = 0;
     const items = [];
-    let prescriptionRequired = false;
+    let prescriptionRequired =
+      false;
 
     for (const id of ids) {
       const product =
@@ -442,7 +497,9 @@ export async function POST(request) {
         quantities.get(id);
 
       const available =
-        Number(stock.get(id) || 0);
+        Number(
+          stock.get(id) || 0
+        );
 
       if (
         available < quantity
@@ -453,7 +510,8 @@ export async function POST(request) {
             error:
               `${product.name} is currently unavailable in the requested quantity. ` +
               `Available: ${available}.`,
-            medicine_id: id,
+            medicine_id:
+              id,
             available_quantity:
               available,
           },
@@ -461,8 +519,11 @@ export async function POST(request) {
         );
       }
 
-      if (product.prescription) {
-        prescriptionRequired = true;
+      if (
+        product.prescription
+      ) {
+        prescriptionRequired =
+          true;
       }
 
       const lineTotal =
@@ -476,14 +537,20 @@ export async function POST(request) {
         lineTotal;
 
       items.push({
-        medicine_id: id,
+        medicine_id:
+          id,
+
         medicine_name:
           product.name,
+
         category:
           product.category,
+
         quantity,
+
         unit_price:
           product.mrp,
+
         line_total:
           lineTotal,
       });
@@ -496,7 +563,9 @@ export async function POST(request) {
           )
         : null;
 
-    if (prescriptionRequired) {
+    if (
+      prescriptionRequired
+    ) {
       if (
         !Number.isInteger(
           prescriptionId
@@ -518,7 +587,9 @@ export async function POST(request) {
         error:
           prescriptionError,
       } = await supabaseAdmin
-        .from("prescriptions")
+        .from(
+          "prescriptions"
+        )
         .select(
           "id,status,order_id"
         )
@@ -559,11 +630,128 @@ export async function POST(request) {
     const total =
       subtotal;
 
+    /*
+     * Home-delivery serviceability
+     *
+     * Supabase is the source of truth for:
+     * - physical store coordinates
+     * - 2 km delivery radius
+     * - ₹199 minimum order
+     *
+     * The browser sends fresh GPS coordinates.
+     * The server asks Supabase to verify them.
+     */
+    let serviceability = null;
+    let deliveryLatitude = null;
+    let deliveryLongitude = null;
+
+    if (
+      deliveryMethod ===
+      "delivery"
+    ) {
+      deliveryLatitude =
+        body?.latitude == null ||
+        body?.latitude === ""
+          ? null
+          : Number(
+              body.latitude
+            );
+
+      deliveryLongitude =
+        body?.longitude == null ||
+        body?.longitude === ""
+          ? null
+          : Number(
+              body.longitude
+            );
+
+      if (
+        !Number.isFinite(
+          deliveryLatitude
+        ) ||
+        !Number.isFinite(
+          deliveryLongitude
+        ) ||
+        deliveryLatitude < -90 ||
+        deliveryLatitude > 90 ||
+        deliveryLongitude < -180 ||
+        deliveryLongitude > 180
+      ) {
+        return NextResponse.json(
+          {
+            success: false,
+            error:
+              "Fresh GPS verification is required for home delivery.",
+          },
+          { status: 400 }
+        );
+      }
+
+      const {
+        data:
+          serviceabilityResult,
+        error:
+          serviceabilityError,
+      } =
+        await supabaseAdmin.rpc(
+          "check_home_delivery_serviceability",
+          {
+            p_latitude:
+              deliveryLatitude,
+
+            p_longitude:
+              deliveryLongitude,
+
+            p_order_amount:
+              total,
+          }
+        );
+
+      if (
+        serviceabilityError
+      ) {
+        throw serviceabilityError;
+      }
+
+      serviceability =
+        serviceabilityResult;
+
+      if (
+        !serviceability?.serviceable
+      ) {
+        return NextResponse.json(
+          {
+            success: false,
+
+            error:
+              serviceability?.reason ||
+              "Home delivery is not available at this location.",
+
+            delivery_distance_km:
+              serviceability?.distance_km ??
+              null,
+
+            max_delivery_distance_km:
+              serviceability?.max_distance_km ??
+              2,
+
+            minimum_order_amount:
+              serviceability?.minimum_order_amount ??
+              199,
+          },
+          { status: 422 }
+        );
+      }
+    }
+
     const orderNumber =
       `DMO-${new Date()
         .toISOString()
         .slice(0, 10)
-        .replaceAll("-", "")}-${randomUUID()
+        .replaceAll(
+          "-",
+          ""
+        )}-${randomUUID()
         .slice(0, 6)
         .toUpperCase()}`;
 
@@ -582,48 +770,88 @@ export async function POST(request) {
         .insert({
           order_number:
             orderNumber,
+
           tracking_token:
             trackingToken,
+
           customer_id:
             user.id,
+
           customer_name:
             customerName,
+
           customer_phone:
             customerPhone,
+
           customer_email:
             customerEmail,
+
           address_line1:
             addressLine1,
+
           address_line2:
             addressLine2,
+
           landmark,
+
           city,
+
           state,
+
           pincode,
+
           delivery_method:
             deliveryMethod,
+
           notes:
             normalize(
               body?.notes,
               500
             ) || null,
+
           subtotal,
+
           discount: 0,
+
           delivery_fee: 0,
+
           total,
+
           payment_method:
             paymentMethod,
+
           payment_status:
             "pending",
+
           order_status:
             "pending_review",
+
           prescription_status:
             prescriptionRequired
               ? "pending"
               : "not_required",
+
           prescription_id:
             prescriptionRequired
               ? prescriptionId
+              : null,
+
+          delivery_distance_km:
+            deliveryMethod ===
+            "delivery"
+              ? serviceability?.distance_km
+              : null,
+
+          delivery_latitude:
+            deliveryMethod ===
+            "delivery"
+              ? deliveryLatitude
+              : null,
+
+          delivery_longitude:
+            deliveryMethod ===
+            "delivery"
+              ? deliveryLongitude
               : null,
         })
         .select(
@@ -631,14 +859,16 @@ export async function POST(request) {
         )
         .single();
 
-    if (orderError)
+    if (orderError) {
       throw orderError;
+    }
 
     orderId =
       order.id;
 
     const {
-      error: itemError,
+      error:
+        itemError,
     } =
       await supabaseAdmin
         .from(
@@ -654,10 +884,13 @@ export async function POST(request) {
           )
         );
 
-    if (itemError)
+    if (itemError) {
       throw itemError;
+    }
 
-    if (prescriptionRequired) {
+    if (
+      prescriptionRequired
+    ) {
       const {
         error:
           attachError,
@@ -669,6 +902,7 @@ export async function POST(request) {
           .update({
             order_id:
               order.id,
+
             updated_at:
               new Date().toISOString(),
           })
@@ -681,12 +915,14 @@ export async function POST(request) {
             null
           );
 
-      if (attachError)
+      if (attachError) {
         throw attachError;
+      }
     }
 
     const {
-      error: eventError,
+      error:
+        eventError,
     } =
       await supabaseAdmin
         .from(
@@ -695,8 +931,10 @@ export async function POST(request) {
         .insert({
           order_id:
             order.id,
+
           status:
             "pending_review",
+
           note:
             paymentMethod ===
             "upi_manual"
@@ -704,26 +942,37 @@ export async function POST(request) {
               : "Customer order received. Payment will be collected at store pickup.",
         });
 
-    if (eventError)
+    if (eventError) {
       throw eventError;
+    }
 
     return NextResponse.json({
       success: true,
+
       order: {
         ...order,
+
         items,
+
         upi:
           paymentMethod ===
           "upi_manual"
             ? {
-                vpa: UPI_VPA,
+                vpa:
+                  UPI_VPA,
+
                 payee_name:
                   "Dhiman Medicos",
-                amount: total,
-                currency: "INR",
+
+                amount:
+                  total,
+
+                currency:
+                  "INR",
               }
             : null,
       },
+
       tracking_url:
         `/order/${trackingToken}`,
     });
@@ -755,4 +1004,4 @@ export async function POST(request) {
       { status: 500 }
     );
   }
-}
+          }
