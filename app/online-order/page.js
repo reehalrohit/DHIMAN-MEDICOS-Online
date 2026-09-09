@@ -1347,7 +1347,6 @@ export default function OnlineOrderPage() {
   (form.delivery === "delivery" && !location) ||
   (form.delivery === "delivery" && total < 199)
               }
-                }
                 style={{
                   ...styles.primary,
                   opacity:
