@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { CATALOG } from "../../../lib/medicines";
 import { medicineKey } from "../../../lib/inventory";
 import { supabaseAdmin } from "../../../lib/supabase-admin";
+import { createServerClient } from "@supabase/ssr";
 
 export const dynamic = "force-dynamic";
 
@@ -92,6 +93,37 @@ export async function POST(request) {
   let orderId = null;
 
   try {
+    const authResponse = NextResponse.next();
+    const supabaseAuth = createServerClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL,
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
+      {
+        cookies: {
+          getAll() {
+            return request.cookies.getAll();
+          },
+          setAll() {},
+        },
+      }
+    );
+
+    const {
+      data: { user },
+      error: authError,
+    } = await supabaseAuth.auth.getUser();
+
+    if (authError) throw authError;
+
+    if (!user) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: "Customer authentication required.",
+        },
+        { status: 401 }
+      );
+    }
+
     const body = await request.json();
 
     const rawItems = Array.isArray(body?.items)
@@ -552,6 +584,8 @@ export async function POST(request) {
             orderNumber,
           tracking_token:
             trackingToken,
+          customer_id:
+            user.id,
           customer_name:
             customerName,
           customer_phone:
