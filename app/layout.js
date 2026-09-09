@@ -1,5 +1,5 @@
 import "./styles.css";
-import { Analytics } from "@vercel/analytics/react";
+import { Analytics } from "@vercel/analytics/next";
 import "./styles/thermal.css";
 
 export const metadata = {
