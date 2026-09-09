@@ -4,6 +4,6 @@ export default function robots() {
       userAgent: "*",
       allow: "/",
     },
-    sitemap: "https://dhiman-medicos.vercel.app/sitemap.xml",
+    sitemap: "https://dhiman-medicos-online.vercel.app/sitemap.xml",
   };
 }
