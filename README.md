@@ -1,20 +1,83 @@
-DHIMAN MEDICOS - MANUAL UPI PAYMENT PATCH
+# 💊 Dhiman Medicos – Online Pharmacy
 
-Payment flow:
-- Home delivery: UPI advance payment only.
-- Store pickup: Pay on pickup or UPI.
-- Customer UPI VPA: dhimanmedicos@upi
-- Order is created as payment_status=pending.
-- Customer receives an Open UPI app link with the exact order amount.
-- Pharmacy staff manually verifies the bank/UPI transaction.
-- Staff clicks "Mark UPI payment received" in Admin > Online Store Orders.
-- Order acceptance remains blocked until payment_status=paid.
+A production-ready online ordering platform for **Dhiman Medicos, Binewal, Hoshiarpur, Punjab**.
 
-Files included:
-- app/online-order/page.js
-- app/api/online-orders/route.js
-- app/api/pos/online-orders/route.js
-- app/admin/orders/page.js
-- supabase/migrations/20260908_manual_upi_payment.sql
+Customers can browse medicines, add products to cart, choose store pickup or home delivery, upload prescriptions where required, and place orders through the online checkout.
 
-The Razorpay verification/webhook files are intentionally not deleted in this patch because they may be needed for historical Razorpay orders. They are no longer used by the customer checkout flow.
+## 🚀 Production
+
+The application is deployed with:
+
+- **Frontend / API:** Next.js
+- **Hosting:** Vercel
+- **Database:** Supabase PostgreSQL
+- **Authentication:** Supabase Auth
+- **Payments:** Razorpay / manual UPI depending on checkout flow
+- **PWA:** Next PWA
+- **Source control:** GitHub
+
+Production:
+
+`https://dhiman-medicos-online.vercel.app`
+
+## 🛒 Online Ordering
+
+The customer checkout supports:
+
+### Store Pickup
+
+- No delivery charge
+- Pickup from Dhiman Medicos
+- **Pay on pickup (COD)** supported
+- UPI/online payment can also be offered
+
+### Home Delivery
+
+Home delivery is restricted to the configured delivery area.
+
+Current rules:
+
+- **Minimum order:** ₹199
+- **Maximum delivery radius:** 2 km
+- **GPS verification:** required
+- **Payment:** UPI advance payment
+- Delivery availability is verified server-side through Supabase
+
+When the cart total is below ₹199, checkout displays a red warning:
+
+> ⚠️ Minimum order for home delivery is ₹199. Add more items to continue.
+
+The order button remains disabled until the minimum is reached.
+
+## 📦 Order Flow
+
+```text
+Customer
+   ↓
+Browse Medicines
+   ↓
+Add to Cart
+   ↓
+Checkout
+   ↓
+Choose:
+ ├── Store Pickup
+ └── Home Delivery
+        ↓
+     GPS Check
+        ↓
+  Delivery Validation
+        ↓
+Payment Selection
+        ↓
+Place Order
+        ↓
+Supabase
+        ↓
+Customer Order
+        ↓
+Order Items
+        ↓
+Order Event / Tracking
+        ↓
+Admin / POS
