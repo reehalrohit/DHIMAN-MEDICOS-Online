@@ -1,26 +1,54 @@
 {
   "name": "Dhiman Medicos",
   "short_name": "Dhiman Medicos",
-  "start_url": "https://dhiman-medicos-online.vercel.app/",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
   "display": "standalone",
+  "orientation": "portrait-primary",
   "background_color": "#ffffff",
   "theme_color": "#065f46",
+  "description": "Dhiman Medicos — order medicines online with store pickup and home delivery.",
+  "lang": "en-IN",
+  "dir": "ltr",
+  "categories": [
+    "medical",
+    "health",
+    "shopping"
+  ],
+  "prefer_related_applications": false,
   "icons": [
     {
       "src": "/icons/icon-192.png",
       "sizes": "192x192",
-      "type": "image/png"
+      "type": "image/png",
+      "purpose": "any"
     },
     {
       "src": "/icons/icon-512.png",
       "sizes": "512x512",
-      "type": "image/png"
+      "type": "image/png",
+      "purpose": "any"
     },
     {
       "src": "/icons/maskable-512.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Order Medicines",
+      "short_name": "Order",
+      "description": "Browse and order medicines",
+      "url": "/online-order"
+    },
+    {
+      "name": "Storefront",
+      "short_name": "Store",
+      "description": "Open Dhiman Medicos storefront",
+      "url": "/"
     }
   ]
 }
