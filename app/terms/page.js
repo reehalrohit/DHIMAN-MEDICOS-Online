@@ -84,7 +84,7 @@ export default function TermsPage() {
             method and the options displayed at checkout.
           </p>
           <p>
-            Online payments are processed through Razorpay. Dhiman Medicos
+            Online payments are processed through UPI. Dhiman Medicos
             does not receive or store your complete card or banking credentials
             through the ordering application.
           </p>
