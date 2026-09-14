@@ -2,67 +2,91 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { CATALOG } from "../../lib/medicines";
-import {
-  medicineKey,
-  getStockStatus,
-} from "../../lib/inventory";
+import { medicineKey, getStockStatus } from "../../lib/inventory";
+
+const FILTERS = [
+  ["all", "All"],
+  ["in_stock", "In Stock"],
+  ["low_stock", "Low Stock"],
+  ["out_of_stock", "Out of Stock"],
+  ["expired", "Expired"],
+  ["expiring_30", "Expiring ≤30d"],
+  ["no_category", "No Category"],
+];
+
+function money(value) {
+  const n = Number(value || 0);
+  return Number.isFinite(n)
+    ? `₹${n.toLocaleString("en-IN", {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      })}`
+    : "₹0.00";
+}
+
+function getExpiryDays(dateString) {
+  if (!dateString) return null;
+  const date = new Date(`${dateString}T00:00:00`);
+  if (Number.isNaN(date.getTime())) return null;
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  return Math.ceil(
+    (date.getTime() - today.getTime()) / 86400000
+  );
+}
+
+function formatExpiry(dateString) {
+  if (!dateString) return "Not set";
+  const date = new Date(`${dateString}T00:00:00`);
+  if (Number.isNaN(date.getTime())) return "Invalid";
+  return date.toLocaleDateString("en-IN", {
+    month: "2-digit",
+    year: "2-digit",
+  });
+}
 
 export default function InventoryPage() {
   const [inventory, setInventory] = useState([]);
   const [search, setSearch] = useState("");
+  const [filter, setFilter] = useState("all");
   const [loading, setLoading] = useState(true);
   const [savingId, setSavingId] = useState(null);
   const [movingId, setMovingId] = useState(null);
-
-  // Direct stock quantity used by "Save Stock".
-  const [quantities, setQuantities] = useState({});
-
-  // Quantity used by Stock In / Stock Out.
-  const [movementQuantities, setMovementQuantities] =
-    useState({});
-
-  // Batch/expiry fields used when saving inventory metadata.
-  const [batchDetails, setBatchDetails] = useState({});
-
   const [message, setMessage] = useState("");
-  const [messageType, setMessageType] = useState("");
+  const [messageType, setMessageType] = useState("success");
 
-  /*
-   * Convert existing medicine catalogue into a flat list.
-   * The catalogue remains the source for medicine name,
-   * MRP and category.
-   */
+  const [edit, setEdit] = useState({});
+  const [movementQty, setMovementQty] = useState({});
+
   const medicines = useMemo(() => {
     const map = new Map();
 
     for (const category of CATALOG || []) {
-      for (const item of category.items || []) {
+      for (const item of category?.items || []) {
         if (!item?.name) continue;
 
-        const medicineId = medicineKey(item.name);
+        const id = medicineKey(item.name);
 
-        if (!map.has(medicineId)) {
-          map.set(medicineId, {
-            medicineId,
+        if (!map.has(id)) {
+          map.set(id, {
+            medicineId: id,
             name: item.name,
-            mrp: Number(item.mrp || 0),
-            category: category.name || "",
+            catalogMrp: Number(item.mrp || 0),
+            category: category?.name || "",
+            prescription: Boolean(item.prescription),
           });
         }
       }
     }
 
-    return Array.from(map.values());
+    return [...map.values()];
   }, []);
 
-  /*
-   * Load inventory from Supabase through our API.
-   */
   async function loadInventory(showLoader = true) {
     try {
-      if (showLoader) {
-        setLoading(true);
-      }
+      if (showLoader) setLoading(true);
 
       const response = await fetch("/api/inventory", {
         cache: "no-store",
@@ -79,15 +103,12 @@ export default function InventoryPage() {
       setInventory(result.inventory || []);
     } catch (error) {
       console.error("Inventory load error:", error);
-
       setMessageType("error");
       setMessage(
         error?.message || "Failed to load inventory"
       );
     } finally {
-      if (showLoader) {
-        setLoading(false);
-      }
+      if (showLoader) setLoading(false);
     }
   }
 
@@ -95,112 +116,171 @@ export default function InventoryPage() {
     loadInventory();
   }, []);
 
-  /*
-   * Fast medicine_id -> inventory record lookup.
-   */
   const inventoryMap = useMemo(() => {
     const map = new Map();
 
-    for (const item of inventory) {
-      map.set(String(item.medicine_id), item);
+    for (const row of inventory) {
+      map.set(String(row.medicine_id), row);
     }
 
     return map;
   }, [inventory]);
 
-  /*
-   * Search existing catalogue.
-   */
-  const filteredMedicines = useMemo(() => {
-    const value = search.trim().toLowerCase();
+  const rows = useMemo(() => {
+    return medicines.map((medicine) => {
+      const record =
+        inventoryMap.get(medicine.medicineId) || null;
 
-    if (!value) {
-      return medicines;
-    }
+      const quantity = Number(record?.quantity || 0);
 
-    return medicines.filter((medicine) => {
-      return (
-        medicine.name.toLowerCase().includes(value) ||
-        medicine.category.toLowerCase().includes(value)
+      const mrp =
+        Number(record?.mrp || 0) > 0
+          ? Number(record.mrp)
+          : medicine.catalogMrp;
+
+      const purchaseRate = Number(
+        record?.purchase_rate ??
+          record?.purchase_price ??
+          0
       );
-    });
-  }, [medicines, search]);
 
-  function getInventoryRecord(medicineId) {
-    return inventoryMap.get(medicineId);
-  }
+      const netRate = Number(
+        record?.net_rate ??
+          purchaseRate ??
+          0
+      );
 
-  function getQuantity(medicineId) {
-    const record = getInventoryRecord(medicineId);
+      const saleRate = Number(
+        record?.sale_rate ??
+          record?.selling_price ??
+          mrp ??
+          0
+      );
 
-    return Number(record?.quantity || 0);
-  }
+      const expiryDays = getExpiryDays(
+        record?.expiry_date
+      );
 
-  function getExpiryDate(record) {
-    if (!record?.expiry_date) return null;
-    const date = new Date(`${record.expiry_date}T00:00:00`);
-    return Number.isNaN(date.getTime()) ? null : date;
-  }
-
-  function daysUntil(date) {
-    if (!date) return null;
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    return Math.ceil((date.getTime() - today.getTime()) / 86400000);
-  }
-
-  const inventoryAlerts = useMemo(() => {
-    const rows = inventory.map((row) => {
-      const expiryDate = getExpiryDate(row);
-      const days = daysUntil(expiryDate);
+      const status = getStockStatus(
+        quantity,
+        Number(record?.low_stock_at ?? 5)
+      );
 
       return {
-        ...row,
-        expiryDate,
-        expiryDays: days,
-        isExpired: days !== null && days < 0,
-        isExpiring30: days !== null && days >= 0 && days <= 30,
-        isExpiring90: days !== null && days >= 0 && days <= 90,
-        isLowStock: Number(row.quantity || 0) > 0 &&
-          Number(row.quantity || 0) <= Number(row.low_stock_at ?? 5),
-        isOutOfStock: Number(row.quantity || 0) === 0,
+        medicine,
+        record,
+        quantity,
+        mrp,
+        purchaseRate,
+        netRate,
+        saleRate,
+        expiryDays,
+        status,
+        isExpired:
+          expiryDays !== null && expiryDays < 0,
+        isExpiring30:
+          expiryDays !== null &&
+          expiryDays >= 0 &&
+          expiryDays <= 30,
+        hasCategory:
+          Boolean(
+            record?.category ||
+              medicine.category
+          ),
       };
     });
+  }, [medicines, inventoryMap]);
+
+  const stats = useMemo(() => {
+    const totalValue = rows.reduce(
+      (sum, row) =>
+        sum +
+        Number(row.netRate || 0) *
+          Number(row.quantity || 0),
+      0
+    );
 
     return {
-      rows,
-      outOfStock: rows.filter((row) => row.isOutOfStock),
-      lowStock: rows.filter((row) => row.isLowStock),
-      expired: rows.filter((row) => row.isExpired),
-      expiring30: rows.filter((row) => row.isExpiring30),
-      expiring90: rows.filter((row) => row.isExpiring90),
-      missingExpiry: rows.filter((row) => !row.expiryDate),
+      total: rows.length,
+      inStock: rows.filter(
+        (row) => row.quantity > 0
+      ).length,
+      lowStock: rows.filter(
+        (row) =>
+          row.quantity > 0 &&
+          row.quantity <=
+            Number(
+              row.record?.low_stock_at ?? 5
+            )
+      ).length,
+      outOfStock: rows.filter(
+        (row) => row.quantity === 0
+      ).length,
+      expired: rows.filter(
+        (row) => row.isExpired
+      ).length,
+      expiring30: rows.filter(
+        (row) => row.isExpiring30
+      ).length,
+      noCategory: rows.filter(
+        (row) => !row.hasCategory
+      ).length,
+      totalValue,
     };
-  }, [inventory]);
+  }, [rows]);
 
-  function formatExpiry(dateString) {
-    if (!dateString) return "Not set";
-    const date = new Date(`${dateString}T00:00:00`);
-    if (Number.isNaN(date.getTime())) return "Invalid date";
-    return date.toLocaleDateString("en-IN", {
-      day: "2-digit",
-      month: "short",
-      year: "numeric",
+  const visibleRows = useMemo(() => {
+    const query = search.trim().toLowerCase();
+
+    return rows.filter((row) => {
+      if (query) {
+        const haystack = [
+          row.medicine.name,
+          row.medicine.category,
+          row.record?.batch_no || "",
+          row.record?.medicine_id || "",
+        ]
+          .join(" ")
+          .toLowerCase();
+
+        if (!haystack.includes(query)) {
+          return false;
+        }
+      }
+
+      if (filter === "in_stock") {
+        return row.quantity > 0;
+      }
+
+      if (filter === "low_stock") {
+        return (
+          row.quantity > 0 &&
+          row.quantity <=
+            Number(
+              row.record?.low_stock_at ?? 5
+            )
+        );
+      }
+
+      if (filter === "out_of_stock") {
+        return row.quantity === 0;
+      }
+
+      if (filter === "expired") {
+        return row.isExpired;
+      }
+
+      if (filter === "expiring_30") {
+        return row.isExpiring30;
+      }
+
+      if (filter === "no_category") {
+        return !row.hasCategory;
+      }
+
+      return true;
     });
-  }
-
-  function expiryLabel(row) {
-    if (row.isExpired) return `Expired ${Math.abs(row.expiryDays)} day(s) ago`;
-    if (row.expiryDays === 0) return "Expires today";
-    if (row.expiryDays === 1) return "Expires tomorrow";
-    if (row.expiryDays !== null && row.expiryDays <= 30) {
-      return `${row.expiryDays} day(s) left`;
-    }
-    if (row.expiryDays !== null && row.expiryDays <= 90) {
-      return `${row.expiryDays} day(s) left`;
-    }
-    return "";
-  }
+  }, [rows, search, filter]);
 
   function showSuccess(text) {
     setMessageType("success");
@@ -212,138 +292,185 @@ export default function InventoryPage() {
     setMessage(text);
   }
 
-  /*
-   * Direct stock setting.
-   *
-   * Keep this because it is useful for:
-   * - opening inventory
-   * - correcting inventory
-   * - initial setup
-   *
-   * Normal stock movement should use Stock In / Stock Out.
-   */
-  async function saveStock(medicine) {
+  function getEditValue(row, key) {
+    const record = row.record || {};
+
+    if (edit[row.medicine.medicineId]?.[key] !== undefined) {
+      return edit[row.medicine.medicineId][key];
+    }
+
+    if (key === "mrp") return row.mrp;
+    if (key === "purchasePrice") {
+      return record.purchase_price ?? row.purchaseRate;
+    }
+    if (key === "netRate") {
+      return record.net_rate ?? row.netRate;
+    }
+    if (key === "sellingPrice") {
+      return record.selling_price ?? row.saleRate;
+    }
+    if (key === "quantity") return row.quantity;
+    if (key === "batchNo") return record.batch_no ?? "";
+    if (key === "expiryDate") {
+      return record.expiry_date ?? "";
+    }
+
+    return "";
+  }
+
+  function setEditValue(
+    medicineId,
+    key,
+    value
+  ) {
+    setEdit((current) => ({
+      ...current,
+      [medicineId]: {
+        ...(current[medicineId] || {}),
+        [key]: value,
+      },
+    }));
+  }
+
+  async function saveInventory(row) {
+    const medicineId =
+      row.medicine.medicineId;
+
     try {
+      setSavingId(medicineId);
       setMessage("");
-      setSavingId(medicine.medicineId);
 
-      const rawQuantity =
-        quantities[medicine.medicineId] ??
-        getQuantity(medicine.medicineId);
+      const payload = {
+        medicineId,
+        name: row.medicine.name,
+        quantity: Number(
+          getEditValue(
+            row,
+            "quantity"
+          )
+        ),
+        lowStockAt: Number(
+          row.record?.low_stock_at ?? 5
+        ),
+        mrp: Number(
+          getEditValue(row, "mrp")
+        ),
+        purchasePrice: Number(
+          getEditValue(
+            row,
+            "purchasePrice"
+          )
+        ),
+        netRate: Number(
+          getEditValue(row, "netRate")
+        ),
+        sellingPrice: Number(
+          getEditValue(
+            row,
+            "sellingPrice"
+          )
+        ),
+        batchNo:
+          String(
+            getEditValue(
+              row,
+              "batchNo"
+            ) || ""
+          ).trim() || null,
+        expiryDate:
+          String(
+            getEditValue(
+              row,
+              "expiryDate"
+            ) || ""
+          ).trim() || null,
+      };
 
-      const quantity = Number(rawQuantity);
-
-      if (!Number.isInteger(quantity) || quantity < 0) {
+      if (
+        !Number.isInteger(payload.quantity) ||
+        payload.quantity < 0
+      ) {
         throw new Error(
-          "Stock quantity must be a whole number of 0 or more"
+          "Quantity must be a whole number of 0 or more."
         );
       }
 
-      const existing = getInventoryRecord(medicine.medicineId);
-      const details = batchDetails[medicine.medicineId] || {};
+      const response = await fetch(
+        "/api/inventory",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type":
+              "application/json",
+          },
+          body: JSON.stringify(
+            payload
+          ),
+        }
+      );
 
-      const batchNo =
-        details.batchNo !== undefined
-          ? String(details.batchNo).trim()
-          : String(existing?.batch_no || "").trim();
+      const result =
+        await response.json();
 
-      const expiryDate =
-        details.expiryDate !== undefined
-          ? String(details.expiryDate).trim()
-          : String(existing?.expiry_date || "").trim();
-
-      const response = await fetch("/api/inventory", {
-        method: "POST",
-
-        headers: {
-          "Content-Type": "application/json",
-        },
-
-        body: JSON.stringify({
-          medicineId: medicine.medicineId,
-          name: medicine.name,
-          quantity,
-          lowStockAt: 5,
-          batchNo: batchNo || null,
-          expiryDate: expiryDate || null,
-        }),
-      });
-
-      const result = await response.json();
-
-      if (!response.ok || !result.success) {
+      if (
+        !response.ok ||
+        !result.success
+      ) {
         throw new Error(
-          result.error || "Failed to save stock"
+          result.error ||
+            "Failed to save inventory."
         );
       }
 
-      setQuantities((current) => {
+      setEdit((current) => {
         const copy = { ...current };
-
-        delete copy[medicine.medicineId];
-
-        return copy;
-      });
-
-      setBatchDetails((current) => {
-        const copy = { ...current };
-        delete copy[medicine.medicineId];
+        delete copy[medicineId];
         return copy;
       });
 
       showSuccess(
-        `${medicine.name}: stock set to ${quantity}`
+        `${row.medicine.name} updated successfully.`
       );
 
       await loadInventory(false);
     } catch (error) {
-      console.error("Save stock error:", error);
-
+      console.error(
+        "Save inventory error:",
+        error
+      );
       showError(
-        error?.message || "Failed to save stock"
+        error?.message ||
+          "Failed to save inventory."
       );
     } finally {
       setSavingId(null);
     }
   }
 
-  /*
-   * Stock In / Stock Out.
-   *
-   * Stock In uses PURCHASE.
-   * Stock Out uses PURCHASE_RETURN for now because it is a
-   * manual inventory removal.
-   *
-   * POS will later use SALE.
-   */
-  async function moveStock(medicine, direction) {
+  async function moveStock(row, direction) {
+    const medicineId =
+      row.medicine.medicineId;
+
+    const quantity = Number(
+      movementQty[medicineId]
+    );
+
     try {
-      setMessage("");
-      setMovingId(
-        `${medicine.medicineId}-${direction}`
-      );
-
-      const rawQuantity =
-        movementQuantities[medicine.medicineId];
-
-      const quantity = Number(rawQuantity);
-
-      if (!Number.isInteger(quantity) || quantity <= 0) {
+      if (
+        !Number.isInteger(quantity) ||
+        quantity <= 0
+      ) {
         throw new Error(
-          "Enter a positive whole-number quantity"
+          "Enter a positive whole-number quantity."
         );
       }
 
-      const currentStock = getQuantity(
-        medicine.medicineId
-      );
-
       if (
         direction === "out" &&
-        quantity > currentStock
+        quantity > row.quantity
       ) {
         throw new Error(
-          `Insufficient stock. Available: ${currentStock}`
+          `Insufficient stock. Available: ${row.quantity}.`
         );
       }
 
@@ -352,63 +479,65 @@ export default function InventoryPage() {
           ? "purchase"
           : "purchase_return";
 
-      const note =
-        direction === "in"
-          ? "Manual stock in"
-          : "Manual stock out";
+      setMovingId(
+        `${medicineId}-${direction}`
+      );
 
       const response = await fetch(
         "/api/inventory/movement",
         {
           method: "POST",
-
           headers: {
-            "Content-Type": "application/json",
+            "Content-Type":
+              "application/json",
           },
-
           body: JSON.stringify({
-            medicineId: medicine.medicineId,
+            medicineId,
             type,
             quantity,
-            note,
+            note:
+              direction === "in"
+                ? "Manual stock in"
+                : "Manual stock out",
           }),
         }
       );
 
-      const result = await response.json();
+      const result =
+        await response.json();
 
-      if (!response.ok || !result.success) {
+      if (
+        !response.ok ||
+        !result.success
+      ) {
         throw new Error(
           result.error ||
-            "Failed to process stock movement"
+            "Failed to update stock."
         );
       }
 
-      setMovementQuantities((current) => {
-        const copy = { ...current };
+      setMovementQty((current) => ({
+        ...current,
+        [medicineId]: "",
+      }));
 
-        delete copy[medicine.medicineId];
-
-        return copy;
-      });
-
-      if (direction === "in") {
-        showSuccess(
-          `${medicine.name}: +${quantity} added. Stock is now ${result.quantity}.`
-        );
-      } else {
-        showSuccess(
-          `${medicine.name}: -${quantity} removed. Stock is now ${result.quantity}.`
-        );
-      }
+      showSuccess(
+        `${row.medicine.name}: ${
+          direction === "in" ? "+" : "-"
+        }${quantity} units. New stock: ${
+          result.quantity
+        }.`
+      );
 
       await loadInventory(false);
     } catch (error) {
-      console.error("Stock movement error:", error);
-
+      console.error(
+        "Stock movement error:",
+        error
+      );
       showError(
         error?.message ||
-          "Failed to process stock movement"
+          "Failed to update stock."
       );
     } finally {
       setMovingId(null);
@@ -418,161 +547,235 @@ export default function InventoryPage() {
   return (
     <main
       style={{
-        maxWidth: "1100px",
+        maxWidth: 1180,
         margin: "0 auto",
-        padding: "24px 16px 60px",
+        padding: "22px 14px 60px",
       }}
     >
-      <div style={{ marginBottom: "24px" }}>
-        <h1
-          style={{
-            margin: 0,
-            fontSize: "28px",
-            fontWeight: 800,
-          }}
-        >
-          Inventory Management
-        </h1>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "flex-end",
+          justifyContent: "space-between",
+          gap: 16,
+          flexWrap: "wrap",
+          marginBottom: 16,
+        }}
+      >
+        <div>
+          <h1
+            style={{
+              margin: 0,
+              fontSize: 28,
+              fontWeight: 800,
+              letterSpacing: "-0.02em",
+            }}
+          >
+            View Stocks
+          </h1>
 
-        <p
+          <div
+            style={{
+              marginTop: 6,
+              color: "#555",
+              fontSize: 15,
+            }}
+          >
+            {stats.total.toLocaleString("en-IN")} Items
+            {" | "}
+            {money(stats.totalValue)} Net Stock Value
+          </div>
+        </div>
+      </div>
+
+      {stats.noCategory > 0 && (
+        <div
           style={{
-            marginTop: "8px",
-            opacity: 0.7,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 12,
+            padding: "14px 16px",
+            borderRadius: 12,
+            marginBottom: 14,
+            background: "#fff7ed",
+            border: "1px solid #fdba74",
+            color: "#9a3412",
           }}
         >
-          Manage medicine stock for Dhiman Medicos.
-        </p>
-      </div>
+          <div>
+            No Category for{" "}
+            <strong>
+              {stats.noCategory.toLocaleString(
+                "en-IN"
+              )}
+            </strong>{" "}
+            Items
+          </div>
+
+          <button
+            type="button"
+            onClick={() => setFilter("no_category")}
+            style={{
+              border: 0,
+              background: "transparent",
+              color: "#7c2d12",
+              fontWeight: 800,
+              cursor: "pointer",
+            }}
+          >
+            View →
+          </button>
+        </div>
+      )}
 
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
-          gap: "10px",
-          marginBottom: "18px",
+          gridTemplateColumns:
+            "repeat(auto-fit, minmax(145px, 1fr))",
+          gap: 9,
+          marginBottom: 14,
         }}
       >
         {[
-          ["Out of stock", inventoryAlerts.outOfStock.length, "#b91c1c"],
-          ["Low stock", inventoryAlerts.lowStock.length, "#c2410c"],
-          ["Expired", inventoryAlerts.expired.length, "#991b1b"],
-          ["Expiring ≤30d", inventoryAlerts.expiring30.length, "#a16207"],
-          ["Expiring ≤90d", inventoryAlerts.expiring90.length, "#ca8a04"],
-        ].map(([label, value, borderColor]) => (
-          <div
+          ["In Stock", stats.inStock],
+          ["Low Stock", stats.lowStock],
+          ["Out of Stock", stats.outOfStock],
+          ["Expired", stats.expired],
+          ["Expiring ≤30d", stats.expiring30],
+          ["No Category", stats.noCategory],
+        ].map(([label, value]) => (
+          <button
             key={label}
+            type="button"
+            onClick={() => {
+              const keyMap = {
+                "In Stock": "in_stock",
+                "Low Stock": "low_stock",
+                "Out of Stock": "out_of_stock",
+                Expired: "expired",
+                "Expiring ≤30d": "expiring_30",
+                "No Category": "no_category",
+              };
+              setFilter(keyMap[label]);
+            }}
             style={{
-              border: `1px solid ${borderColor}`,
-              borderRadius: "12px",
-              padding: "13px",
-              background: "rgba(255,255,255,0.75)",
+              textAlign: "left",
+              border:
+                filter ===
+                ({
+                  "In Stock": "in_stock",
+                  "Low Stock": "low_stock",
+                  "Out of Stock": "out_of_stock",
+                  Expired: "expired",
+                  "Expiring ≤30d": "expiring_30",
+                  "No Category": "no_category",
+                }[label])
+                  ? "2px solid #5b1b73"
+                  : "1px solid #ddd",
+              borderRadius: 12,
+              background: "#fff",
+              padding: 12,
+              cursor: "pointer",
             }}
           >
-            <div style={{ fontSize: "12px", opacity: 0.72 }}>{label}</div>
-            <div style={{ fontSize: "25px", fontWeight: 800, marginTop: "3px" }}>
-              {value}
+            <div
+              style={{
+                fontSize: 12,
+                color: "#666",
+              }}
+            >
+              {label}
             </div>
-          </div>
+
+            <div
+              style={{
+                marginTop: 4,
+                fontSize: 22,
+                fontWeight: 800,
+              }}
+            >
+              {value.toLocaleString(
+                "en-IN"
+              )}
+            </div>
+          </button>
         ))}
       </div>
 
-      {(inventoryAlerts.expired.length > 0 ||
-        inventoryAlerts.expiring30.length > 0 ||
-        inventoryAlerts.lowStock.length > 0 ||
-        inventoryAlerts.outOfStock.length > 0) && (
-        <div
-          style={{
-            border: "1px solid #f0c36d",
-            borderRadius: "14px",
-            padding: "15px",
-            marginBottom: "18px",
-            background: "rgba(255, 248, 220, 0.7)",
-          }}
-        >
-          <div style={{ fontWeight: 800, marginBottom: "10px" }}>
-            Inventory alerts
-          </div>
-
-          <div style={{ display: "grid", gap: "8px" }}>
-            {inventoryAlerts.expired.slice(0, 5).map((row) => (
-              <div key={`expired-${row.medicine_id}`} style={{ fontSize: "14px" }}>
-                <strong>🔴 {row.medicine_name}</strong> — expired on {formatExpiry(row.expiry_date)}
-                {row.quantity ? ` · ${row.quantity} in stock` : ""}
-              </div>
-            ))}
-
-            {inventoryAlerts.expiring30
-              .filter((row) => !row.isExpired)
-              .slice(0, 5)
-              .map((row) => (
-                <div key={`expiry30-${row.medicine_id}`} style={{ fontSize: "14px" }}>
-                  <strong>🟠 {row.medicine_name}</strong> — {expiryLabel(row)}
-                  {" · "}expiry {formatExpiry(row.expiry_date)}
-                </div>
-              ))}
-
-            {inventoryAlerts.outOfStock.slice(0, 5).map((row) => (
-              <div key={`out-${row.medicine_id}`} style={{ fontSize: "14px" }}>
-                <strong>⚫ {row.medicine_name}</strong> — out of stock
-              </div>
-            ))}
-
-            {inventoryAlerts.lowStock.slice(0, 5).map((row) => (
-              <div key={`low-${row.medicine_id}`} style={{ fontSize: "14px" }}>
-                <strong>🟡 {row.medicine_name}</strong> — low stock ({row.quantity} left)
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {inventoryAlerts.missingExpiry.length > 0 && (
-        <div
-          style={{
-            marginBottom: "18px",
-            fontSize: "13px",
-            opacity: 0.72,
-          }}
-        >
-          {inventoryAlerts.missingExpiry.length} medicine(s) have no expiry date recorded.
-          Use “Batch & Expiry” below to complete their inventory data.
-        </div>
-      )}
-
-      <input
-        type="search"
-        value={search}
-        onChange={(event) =>
-          setSearch(event.target.value)
-        }
-        placeholder="Search medicine or category..."
+      <div
         style={{
-          width: "100%",
-          boxSizing: "border-box",
-          padding: "14px 16px",
-          borderRadius: "12px",
-          border: "1px solid #ccc",
-          fontSize: "16px",
-          marginBottom: "18px",
+          display: "flex",
+          gap: 8,
+          flexWrap: "wrap",
+          marginBottom: 12,
         }}
-      />
+      >
+        <input
+          type="search"
+          value={search}
+          onChange={(event) =>
+            setSearch(event.target.value)
+          }
+          placeholder="Search medicine, batch or category..."
+          style={{
+            flex: "1 1 320px",
+            minWidth: 0,
+            padding: "13px 15px",
+            border:
+              "1px solid #ccc",
+            borderRadius: 11,
+            fontSize: 16,
+          }}
+        />
+
+        <select
+          value={filter}
+          onChange={(event) =>
+            setFilter(event.target.value)
+          }
+          style={{
+            flex: "0 1 190px",
+            padding: "13px 12px",
+            border:
+              "1px solid #ccc",
+            borderRadius: 11,
+            background: "#fff",
+            fontSize: 15,
+          }}
+        >
+          {FILTERS.map(
+            ([value, label]) => (
+              <option
+                key={value}
+                value={value}
+              >
+                {label}
+              </option>
+            )
+          )}
+        </select>
+      </div>
 
       {message && (
         <div
           style={{
-            padding: "13px 14px",
-            borderRadius: "10px",
-            marginBottom: "18px",
-
+            padding: "12px 14px",
+            borderRadius: 10,
+            marginBottom: 14,
             border:
               messageType === "error"
-                ? "1px solid #d33"
-                : "1px solid #299c55",
-
+                ? "1px solid #ef4444"
+                : "1px solid #22c55e",
             background:
               messageType === "error"
-                ? "rgba(220, 50, 50, 0.08)"
-                : "rgba(40, 170, 90, 0.08)",
+                ? "#fef2f2"
+                : "#f0fdf4",
+            color:
+              messageType === "error"
+                ? "#b91c1c"
+                : "#166534",
           }}
         >
           {message}
@@ -585,110 +788,170 @@ export default function InventoryPage() {
         <>
           <div
             style={{
-              marginBottom: "14px",
-              fontSize: "14px",
-              opacity: 0.7,
+              marginBottom: 10,
+              color: "#666",
+              fontSize: 13,
             }}
           >
-            Showing {filteredMedicines.length} medicines
+            Showing{" "}
+            {visibleRows.length.toLocaleString(
+              "en-IN"
+            )}{" "}
+            of{" "}
+            {rows.length.toLocaleString(
+              "en-IN"
+            )}{" "}
+            medicines
           </div>
 
           <div
             style={{
               display: "grid",
-              gap: "14px",
+              gap: 12,
             }}
           >
-            {filteredMedicines.map((medicine) => {
-              const currentStock = getQuantity(
-                medicine.medicineId
-              );
-
-              const stockInput =
-                quantities[medicine.medicineId] ??
-                currentStock;
-
-              const movementInput =
-                movementQuantities[
-                  medicine.medicineId
-                ] ?? "";
-
-              const status =
-                getStockStatus(currentStock);
+            {visibleRows.map((row) => {
+              const medicineId =
+                row.medicine.medicineId;
 
               const saving =
-                savingId === medicine.medicineId;
+                savingId === medicineId;
 
               const stockInLoading =
                 movingId ===
-                `${medicine.medicineId}-in`;
+                `${medicineId}-in`;
 
               const stockOutLoading =
                 movingId ===
-                `${medicine.medicineId}-out`;
+                `${medicineId}-out`;
+
+              const status =
+                row.isExpired
+                  ? "Expired"
+                  : row.status;
 
               return (
-                <div
-                  key={medicine.medicineId}
+                <article
+                  key={medicineId}
                   style={{
-                    border: "1px solid #ddd",
-                    borderRadius: "14px",
-                    padding: "16px",
+                    background: "#fff",
+                    border:
+                      "1px solid #ddd",
+                    borderRadius: 16,
+                    padding: 16,
+                    boxShadow:
+                      "0 2px 8px rgba(0,0,0,0.04)",
                   }}
                 >
                   <div
                     style={{
                       display: "flex",
+                      gap: 14,
                       justifyContent:
                         "space-between",
-                      gap: "16px",
                       flexWrap: "wrap",
                     }}
                   >
                     <div
                       style={{
-                        flex: "1 1 250px",
+                        flex: "1 1 300px",
+                        minWidth: 0,
                       }}
                     >
-                      <strong
-                        style={{
-                          display: "block",
-                          fontSize: "17px",
-                        }}
-                      >
-                        {medicine.name}
-                      </strong>
-
                       <div
                         style={{
-                          marginTop: "6px",
-                          fontSize: "14px",
-                          opacity: 0.7,
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 8,
+                          flexWrap: "wrap",
                         }}
                       >
-                        {medicine.category}
+                        <h2
+                          style={{
+                            margin: 0,
+                            fontSize: 20,
+                          }}
+                        >
+                          {row.medicine.name}
+                        </h2>
+
+                        {row.medicine.prescription && (
+                          <span
+                            style={{
+                              fontSize: 12,
+                              fontWeight: 800,
+                              color: "#92400e",
+                              background:
+                                "#fef3c7",
+                              border:
+                                "1px solid #f59e0b",
+                              padding:
+                                "3px 7px",
+                              borderRadius: 999,
+                            }}
+                          >
+                            Rx
+                          </span>
+                        )}
                       </div>
 
                       <div
                         style={{
-                          marginTop: "8px",
-                          fontWeight: 700,
+                          marginTop: 5,
+                          color: "#666",
+                          fontSize: 14,
                         }}
                       >
-                        MRP ₹
-                        {medicine.mrp.toFixed(2)}
+                        {row.medicine.category ||
+                          "No Category"}
+                      </div>
+
+                      <div
+                        style={{
+                          marginTop: 10,
+                          display: "inline-block",
+                          padding:
+                            "7px 11px",
+                          borderRadius: 9,
+                          background:
+                            status === "In Stock"
+                              ? "#e8f7ed"
+                              : status ===
+                                "Low Stock"
+                              ? "#fff7d6"
+                              : status ===
+                                "Expired"
+                              ? "#fee2e2"
+                              : "#f3f4f6",
+                          color:
+                            status === "In Stock"
+                              ? "#15803d"
+                              : status ===
+                                "Low Stock"
+                              ? "#a16207"
+                              : status ===
+                                "Expired"
+                              ? "#b91c1c"
+                              : "#374151",
+                          fontWeight: 800,
+                          fontSize: 13,
+                        }}
+                      >
+                        {status}
                       </div>
                     </div>
 
                     <div
                       style={{
-                        minWidth: "130px",
+                        textAlign:
+                          "right",
+                        minWidth: 150,
                       }}
                     >
                       <div
                         style={{
-                          fontSize: "13px",
-                          opacity: 0.7,
+                          fontSize: 12,
+                          color: "#666",
                         }}
                       >
                         Current Stock
@@ -696,129 +959,412 @@ export default function InventoryPage() {
 
                       <div
                         style={{
-                          fontSize: "28px",
+                          fontSize: 30,
                           fontWeight: 800,
-                          marginTop: "3px",
                         }}
                       >
-                        {currentStock}
+                        {row.quantity.toLocaleString(
+                          "en-IN"
+                        )}
                       </div>
 
                       <div
                         style={{
-                          marginTop: "3px",
-                          fontSize: "14px",
-                          fontWeight: 700,
+                          fontSize: 13,
+                          color: "#666",
                         }}
                       >
-                        {status}
+                        units
                       </div>
                     </div>
                   </div>
 
-                  {/* BATCH / EXPIRY */}
-
-                  <details style={{ marginTop: "15px" }}>
-                    <summary
-                      style={{
-                        cursor: "pointer",
-                        fontWeight: 700,
-                      }}
-                    >
-                      Batch & Expiry
-                    </summary>
-
-                    <div
-                      style={{
-                        marginTop: "11px",
-                        display: "grid",
-                        gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
-                        gap: "10px",
-                      }}
-                    >
-                      <label style={{ fontSize: "13px", fontWeight: 600 }}>
-                        Batch No.
-                        <input
-                          type="text"
-                          value={
-                            batchDetails[medicine.medicineId]?.batchNo ??
-                            getInventoryRecord(medicine.medicineId)?.batch_no ??
-                            ""
-                          }
-                          onChange={(event) =>
-                            setBatchDetails((current) => ({
-                              ...current,
-                              [medicine.medicineId]: {
-                                ...(current[medicine.medicineId] || {}),
-                                batchNo: event.target.value,
-                              },
-                            }))
-                          }
-                          placeholder="e.g. ABC123"
-                          style={{
-                            display: "block",
-                            width: "100%",
-                            boxSizing: "border-box",
-                            marginTop: "5px",
-                            padding: "10px 11px",
-                            border: "1px solid #ccc",
-                            borderRadius: "9px",
-                            fontSize: "15px",
-                          }}
-                        />
-                      </label>
-
-                      <label style={{ fontSize: "13px", fontWeight: 600 }}>
-                        Expiry Date
-                        <input
-                          type="date"
-                          value={
-                            batchDetails[medicine.medicineId]?.expiryDate ??
-                            getInventoryRecord(medicine.medicineId)?.expiry_date ??
-                            ""
-                          }
-                          onChange={(event) =>
-                            setBatchDetails((current) => ({
-                              ...current,
-                              [medicine.medicineId]: {
-                                ...(current[medicine.medicineId] || {}),
-                                expiryDate: event.target.value,
-                              },
-                            }))
-                          }
-                          style={{
-                            display: "block",
-                            width: "100%",
-                            boxSizing: "border-box",
-                            marginTop: "5px",
-                            padding: "10px 11px",
-                            border: "1px solid #ccc",
-                            borderRadius: "9px",
-                            fontSize: "15px",
-                          }}
-                        />
-                      </label>
-                    </div>
-
-                    <div style={{ marginTop: "9px", fontSize: "13px", opacity: 0.75 }}>
-                      Current expiry: {formatExpiry(getInventoryRecord(medicine.medicineId)?.expiry_date)}
-                    </div>
-                  </details>
-
-                  {/* STOCK MOVEMENT */}
-
                   <div
                     style={{
-                      marginTop: "18px",
-                      paddingTop: "16px",
-                      borderTop:
-                        "1px solid #e5e5e5",
+                      marginTop: 14,
+                      padding:
+                        "14px 12px",
+                      borderRadius: 12,
+                      background:
+                        "#fafafa",
+                      border:
+                        "1px solid #eee",
                     }}
                   >
                     <div
                       style={{
-                        fontWeight: 700,
-                        marginBottom: "9px",
+                        display: "grid",
+                        gridTemplateColumns:
+                          "repeat(4, minmax(0, 1fr))",
+                        gap: 8,
+                      }}
+                    >
+                      {[
+                        ["MRP Rate", row.mrp],
+                        [
+                          "Purc Rate",
+                          row.purchaseRate,
+                        ],
+                        [
+                          "Net Rate",
+                          row.netRate,
+                        ],
+                        [
+                          "Sale Rate",
+                          row.saleRate,
+                        ],
+                      ].map(
+                        ([label, value]) => (
+                          <div
+                            key={label}
+                            style={{
+                              minWidth: 0,
+                            }}
+                          >
+                            <div
+                              style={{
+                                fontSize: 11,
+                                color: "#707070",
+                              }}
+                            >
+                              {label}
+                            </div>
+                            <div
+                              style={{
+                                marginTop: 3,
+                                fontSize: 17,
+                                fontWeight: 800,
+                                wordBreak:
+                                  "break-word",
+                              }}
+                            >
+                              {money(value)}
+                            </div>
+                          </div>
+                        )
+                      )}
+                    </div>
+                  </div>
+
+                  <div
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns:
+                        "repeat(auto-fit, minmax(180px, 1fr))",
+                      gap: 10,
+                      marginTop: 12,
+                    }}
+                  >
+                    <div
+                      style={{
+                        padding: 11,
+                        border:
+                          "1px solid #eee",
+                        borderRadius: 10,
+                      }}
+                    >
+                      <div
+                        style={{
+                          fontSize: 12,
+                          color: "#777",
+                        }}
+                      >
+                        Batch
+                      </div>
+                      <div
+                        style={{
+                          marginTop: 4,
+                          fontWeight: 700,
+                        }}
+                      >
+                        {row.record?.batch_no ||
+                          "Not set"}
+                      </div>
+                    </div>
+
+                    <div
+                      style={{
+                        padding: 11,
+                        border:
+                          row.isExpired
+                            ? "1px solid #ef4444"
+                            : row.isExpiring30
+                            ? "1px solid #f59e0b"
+                            : "1px solid #eee",
+                        borderRadius: 10,
+                      }}
+                    >
+                      <div
+                        style={{
+                          fontSize: 12,
+                          color: "#777",
+                        }}
+                      >
+                        Expiry
+                      </div>
+                      <div
+                        style={{
+                          marginTop: 4,
+                          fontWeight: 700,
+                          color:
+                            row.isExpired
+                              ? "#b91c1c"
+                              : row.isExpiring30
+                              ? "#b45309"
+                              : "#222",
+                        }}
+                      >
+                        {formatExpiry(
+                          row.record?.expiry_date
+                        )}
+                        {row.expiryDays !==
+                          null &&
+                          row.expiryDays >=
+                            0 && (
+                            <span
+                              style={{
+                                marginLeft: 6,
+                                fontSize: 12,
+                              }}
+                            >
+                              ({row.expiryDays}d)
+                            </span>
+                          )}
+                      </div>
+                    </div>
+
+                    <div
+                      style={{
+                        padding: 11,
+                        border:
+                          "1px solid #eee",
+                        borderRadius: 10,
+                      }}
+                    >
+                      <div
+                        style={{
+                          fontSize: 12,
+                          color: "#777",
+                        }}
+                      >
+                        Net Stock Value
+                      </div>
+                      <div
+                        style={{
+                          marginTop: 4,
+                          fontWeight: 800,
+                        }}
+                      >
+                        {money(
+                          row.netRate *
+                            row.quantity
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  <details
+                    style={{
+                      marginTop: 12,
+                    }}
+                  >
+                    <summary
+                      style={{
+                        cursor: "pointer",
+                        fontWeight: 800,
+                        color: "#5b1b73",
+                      }}
+                    >
+                      Edit stock & rates
+                    </summary>
+
+                    <div
+                      style={{
+                        marginTop: 12,
+                        display: "grid",
+                        gridTemplateColumns:
+                          "repeat(auto-fit, minmax(150px, 1fr))",
+                        gap: 9,
+                      }}
+                    >
+                      {[
+                        ["mrp", "MRP Rate"],
+                        [
+                          "purchasePrice",
+                          "Purc Rate",
+                        ],
+                        [
+                          "netRate",
+                          "Net Rate",
+                        ],
+                        [
+                          "sellingPrice",
+                          "Sale Rate",
+                        ],
+                        [
+                          "quantity",
+                          "Quantity",
+                        ],
+                      ].map(
+                        ([key, label]) => (
+                          <label
+                            key={key}
+                            style={{
+                              fontSize: 12,
+                              fontWeight: 700,
+                            }}
+                          >
+                            {label}
+                            <input
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              value={getEditValue(
+                                row,
+                                key
+                              )}
+                              onChange={(event) =>
+                                setEditValue(
+                                  medicineId,
+                                  key,
+                                  event.target.value
+                                )
+                              }
+                              style={{
+                                display: "block",
+                                width: "100%",
+                                boxSizing:
+                                  "border-box",
+                                marginTop: 5,
+                                padding:
+                                  "10px 11px",
+                                border:
+                                  "1px solid #ccc",
+                                borderRadius: 9,
+                                fontSize: 14,
+                              }}
+                            />
+                          </label>
+                        )
+                      )}
+
+                      <label
+                        style={{
+                          fontSize: 12,
+                          fontWeight: 700,
+                        }}
+                      >
+                        Batch No.
+                        <input
+                          type="text"
+                          value={getEditValue(
+                            row,
+                            "batchNo"
+                          )}
+                          onChange={(event) =>
+                            setEditValue(
+                              medicineId,
+                              "batchNo",
+                              event.target.value
+                            )
+                          }
+                          style={{
+                            display:
+                              "block",
+                            width: "100%",
+                            boxSizing:
+                              "border-box",
+                            marginTop: 5,
+                            padding:
+                              "10px 11px",
+                            border:
+                              "1px solid #ccc",
+                            borderRadius: 9,
+                            fontSize: 14,
+                          }}
+                        />
+                      </label>
+
+                      <label
+                        style={{
+                          fontSize: 12,
+                          fontWeight: 700,
+                        }}
+                      >
+                        Expiry Date
+                        <input
+                          type="date"
+                          value={getEditValue(
+                            row,
+                            "expiryDate"
+                          )}
+                          onChange={(event) =>
+                            setEditValue(
+                              medicineId,
+                              "expiryDate",
+                              event.target.value
+                            )
+                          }
+                          style={{
+                            display:
+                              "block",
+                            width: "100%",
+                            boxSizing:
+                              "border-box",
+                            marginTop: 5,
+                            padding:
+                              "10px 11px",
+                            border:
+                              "1px solid #ccc",
+                            borderRadius: 9,
+                            fontSize: 14,
+                          }}
+                        />
+                      </label>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() =>
+                        saveInventory(
+                          row
+                        )
+                      }
+                      disabled={saving}
+                      style={{
+                        marginTop: 11,
+                        padding:
+                          "11px 17px",
+                        border: 0,
+                        borderRadius: 9,
+                        background:
+                          "#5b1b73",
+                        color: "#fff",
+                        fontWeight: 800,
+                        cursor: saving
+                          ? "not-allowed"
+                          : "pointer",
+                      }}
+                    >
+                      {saving
+                        ? "Saving..."
+                        : "Save Inventory"}
+                    </button>
+                  </details>
+
+                  <div
+                    style={{
+                      marginTop: 12,
+                      paddingTop: 12,
+                      borderTop:
+                        "1px solid #eee",
+                    }}
+                  >
+                    <div
+                      style={{
+                        fontSize: 12,
+                        fontWeight: 800,
+                        marginBottom: 7,
                       }}
                     >
                       Stock Movement
@@ -827,8 +1373,7 @@ export default function InventoryPage() {
                     <div
                       style={{
                         display: "flex",
-                        gap: "8px",
-                        alignItems: "center",
+                        gap: 8,
                         flexWrap: "wrap",
                       }}
                     >
@@ -837,25 +1382,28 @@ export default function InventoryPage() {
                         min="1"
                         step="1"
                         placeholder="Qty"
-                        value={movementInput}
+                        value={
+                          movementQty[
+                            medicineId
+                          ] ?? ""
+                        }
                         onChange={(event) =>
-                          setMovementQuantities(
+                          setMovementQty(
                             (current) => ({
                               ...current,
-
-                              [medicine.medicineId]:
-                                event.target.value,
+                              [medicineId]:
+                                event.target
+                                  .value,
                             })
                           )
                         }
                         style={{
-                          width: "90px",
-                          boxSizing: "border-box",
-                          padding: "11px 10px",
+                          width: 90,
+                          padding:
+                            "10px 11px",
                           border:
                             "1px solid #ccc",
-                          borderRadius: "9px",
-                          fontSize: "16px",
+                          borderRadius: 9,
                         }}
                       />
 
@@ -867,16 +1415,18 @@ export default function InventoryPage() {
                         }
                         onClick={() =>
                           moveStock(
-                            medicine,
+                            row,
                             "in"
                           )
                         }
                         style={{
-                          padding: "11px 15px",
+                          padding:
+                            "10px 13px",
                           border: 0,
-                          borderRadius: "9px",
-                          fontWeight: 700,
-                          cursor: "pointer",
+                          borderRadius: 9,
+                          fontWeight: 800,
+                          cursor:
+                            "pointer",
                         }}
                       >
                         {stockInLoading
@@ -889,21 +1439,22 @@ export default function InventoryPage() {
                         disabled={
                           stockInLoading ||
                           stockOutLoading ||
-                          currentStock === 0
+                          row.quantity === 0
                         }
                         onClick={() =>
                           moveStock(
-                            medicine,
+                            row,
                             "out"
                           )
                         }
                         style={{
-                          padding: "11px 15px",
+                          padding:
+                            "10px 13px",
                           border: 0,
-                          borderRadius: "9px",
-                          fontWeight: 700,
+                          borderRadius: 9,
+                          fontWeight: 800,
                           cursor:
-                            currentStock === 0
+                            row.quantity === 0
                               ? "not-allowed"
                               : "pointer",
                         }}
@@ -914,89 +1465,25 @@ export default function InventoryPage() {
                       </button>
                     </div>
                   </div>
-
-                  {/* DIRECT STOCK CORRECTION */}
-
-                  <details
-                    style={{
-                      marginTop: "16px",
-                    }}
-                  >
-                    <summary
-                      style={{
-                        cursor: "pointer",
-                        fontWeight: 600,
-                      }}
-                    >
-                      Set / Correct Stock
-                    </summary>
-
-                    <div
-                      style={{
-                        display: "flex",
-                        gap: "10px",
-                        marginTop: "12px",
-                        alignItems: "center",
-                        flexWrap: "wrap",
-                      }}
-                    >
-                      <input
-                        type="number"
-                        min="0"
-                        step="1"
-                        value={stockInput}
-                        onChange={(event) =>
-                          setQuantities(
-                            (current) => ({
-                              ...current,
-
-                              [medicine.medicineId]:
-                                event.target.value,
-                            })
-                          )
-                        }
-                        style={{
-                          width: "120px",
-                          padding: "10px 12px",
-                          border:
-                            "1px solid #ccc",
-                          borderRadius: "9px",
-                          fontSize: "16px",
-                        }}
-                      />
-
-                      <button
-                        type="button"
-                        disabled={saving}
-                        onClick={() =>
-                          saveStock(medicine)
-                        }
-                        style={{
-                          padding: "11px 18px",
-                          border: 0,
-                          borderRadius: "9px",
-                          cursor: saving
-                            ? "not-allowed"
-                            : "pointer",
-                          fontWeight: 700,
-                        }}
-                      >
-                        {saving
-                          ? "Saving..."
-                          : "Save Stock"}
-                      </button>
-                    </div>
-                  </details>
-                </div>
+                </article>
               );
             })}
           </div>
 
-          {filteredMedicines.length === 0 && (
-            <p>No medicines found.</p>
+          {visibleRows.length === 0 && (
+            <div
+              style={{
+                padding: 30,
+                textAlign: "center",
+                color: "#666",
+              }}
+            >
+              No medicines match the current
+              search/filter.
+            </div>
           )}
         </>
       )}
     </main>
   );
-    }
+}
