@@ -6,13 +6,15 @@ on:
       - "invoices/**"
   workflow_dispatch:
 
+# Never run two invoice imports against Supabase/main at the same time.
 concurrency:
-  group: update-medicines-main
+  group: update-medicine-catalog
   cancel-in-progress: false
 
 jobs:
   update-catalog:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
 
     permissions:
       contents: write
@@ -23,18 +25,10 @@ jobs:
 
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Sync with main
-        run: |
-          git config user.name "Dhiman Medicos Bot"
-          git config user.email "reehalrohit@users.noreply.github.com"
-
-          git fetch origin main
-          git reset --hard origin/main
+          token: ${{ secrets.BOT_TOKEN || secrets.GITHUB_TOKEN }}
 
       - name: Check for CSV files
         id: check
@@ -60,56 +54,47 @@ jobs:
 
       - name: Process invoice CSVs
         if: steps.check.outputs.csv_count != '0'
-        run: |
-          python3 .github/scripts/process-invoice.py
+        run: python3 .github/scripts/process-invoice.py
 
       - name: Cleanup duplicates
         if: steps.check.outputs.csv_count != '0'
-        run: |
-          python3 .github/scripts/cleanup_duplicates.py
+        run: python3 .github/scripts/cleanup_duplicates.py
 
       - name: Validate catalog
         if: steps.check.outputs.csv_count != '0'
-        run: |
-          python3 .github/scripts/validate_catalog.py
+        run: python3 .github/scripts/validate_catalog.py
 
       - name: Verify JS syntax
         if: steps.check.outputs.csv_count != '0'
-        run: |
-          node --check lib/medicines.js
+        run: node --check lib/medicines.js
 
-      - name: Remove generated duplicate report
+      - name: Verify workflow script syntax
         if: steps.check.outputs.csv_count != '0'
-        run: |
-          rm -f duplicates-report.txt
-
-      - name: Confirm main did not change during processing
-        if: steps.check.outputs.csv_count != '0'
-        run: |
-          git fetch origin main
-
-          if [ "$(git rev-parse HEAD)" != "$(git rev-parse origin/main)" ]; then
-            echo "❌ main changed while the invoice was being processed."
-            echo "Re-run the workflow; processing is idempotent."
-            exit 1
-          fi
-
-          echo "✓ main is unchanged; safe to commit"
+        run: python3 -m py_compile .github/scripts/process-invoice.py
 
       - name: Commit updated catalog and invoice history
         if: steps.check.outputs.csv_count != '0'
         run: |
+          git config user.name "Dhiman Medicos Bot"
+          git config user.email "reehalrohit@users.noreply.github.com"
+
+          # Generated duplicate reports must never be included in the commit.
+          rm -f duplicates-report.txt
+
           git add lib/medicines.js
           git add .github/processed-invoices.json 2>/dev/null || true
 
           if git diff --staged --quiet; then
             echo "✓ Nothing to commit."
-            exit 0
+          else
+            ADDED=$(git diff --staged lib/medicines.js | grep '^+.*name:' | wc -l || true)
+
+            git commit -m "Auto-update catalog and inventory from invoice (+${ADDED} medicines)"
+
+            # Rebase generated changes onto any newer main commit before push.
+            git fetch origin main
+            git rebase origin/main
+
+            # checkout@v5 already configured authenticated Git credentials.
+            git push origin HEAD:main
           fi
-
-          ADDED=$(git diff --staged lib/medicines.js | grep '^+.*name:' | wc -l || true)
-
-          git commit -m "Auto-update catalog and inventory from invoice (+${ADDED} medicines)"
-
-          # Keep the repository origin created by actions/checkout.
-          git push origin HEAD:main
