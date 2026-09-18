@@ -1,9 +1,10 @@
 """
-process-invoice.py  v4
+process-invoice.py  v5
 ──────────────────────
 Reads invoice CSVs from invoices/
 Categorises by comprehensive keyword + brand name matching (no AI needed)
 Deduplicates, cleans names, inserts into lib/medicines.js
+Uses an atomic Supabase RPC for batch-aware, idempotent inventory updates
 """
 
 import csv, re, glob, os, json
@@ -576,25 +577,7 @@ def supabase_request(method: str, path: str, payload=None, prefer=None):
         ) from exc
 
 
-def get_inventory_record(medicine_id: str):
-    encoded = request.quote(medicine_id, safe="")
-    rows = supabase_request(
-        "GET",
-        f"inventory?medicine_id=eq.{encoded}&select=medicine_id,medicine_name,quantity,low_stock_at,status&limit=1"
-    )
-    return rows[0] if rows else None
-
-
-def stock_status(quantity: int, low_stock_at: int = 5) -> str:
-    if quantity <= 0:
-        return "Out of Stock"
-    if quantity <= low_stock_at:
-        return "Low Stock"
-    return "In Stock"
-
-
-
-def add_purchase_batch(
+def apply_invoice_purchase(
     name: str,
     quantity: int,
     batch_no: str,
@@ -602,141 +585,62 @@ def add_purchase_batch(
     mrp: float,
     purchase_price: float | None,
     reference_id: str,
+    source_key: str,
 ):
     """
-    Add stock to a specific medicine batch. The database table must enforce
-    UNIQUE(medicine_id, batch_no, expiry) so repeated purchases of the same
-    physical batch accumulate rather than creating duplicate rows.
+    Apply one invoice purchase atomically through Supabase.
+
+    The database function:
+      - locks the invoice line/batch
+      - detects an already-applied source_key
+      - updates/creates the batch first
+      - derives inventory.quantity from SUM(inventory_batches.quantity)
+      - writes an audit movement using the live schema
+
+    This prevents the inventory/batch quantity mismatch that caused the GitHub
+    Actions failure and makes retries safe after a partially completed run.
     """
     if quantity <= 0:
-        return
+        return {"status": "skipped", "reason": "non_positive_quantity"}
     if not batch_no:
         raise RuntimeError(f"Missing batch number for {name}")
+    if not source_key:
+        raise RuntimeError(f"Missing source key for {name}")
 
     medicine_id = medicine_key(name)
-    encoded_id = request.quote(medicine_id, safe="")
-    encoded_batch = request.quote(batch_no, safe="")
-    expiry_filter = (
-        f"expiry=eq.{request.quote(expiry, safe='')}"
-        if expiry
-        else "expiry=is.null"
+    result = supabase_request(
+        "POST",
+        "rpc/apply_invoice_purchase",
+        {
+            "p_medicine_id": medicine_id,
+            "p_medicine_name": name,
+            "p_batch_no": batch_no,
+            "p_expiry": expiry or "",
+            "p_mrp": mrp,
+            "p_purchase_price": purchase_price,
+            "p_quantity": quantity,
+            "p_reference": reference_id,
+            "p_source_key": source_key,
+        },
+        "return=representation",
     )
 
-    rows = supabase_request(
-        "GET",
-        "inventory_batches?"
-        f"medicine_id=eq.{encoded_id}&"
-        f"batch_no=eq.{encoded_batch}&"
-        f"{expiry_filter}&"
-        "select=id,quantity&limit=1",
-    )
+    # PostgREST returns a JSON object for a scalar jsonb function.
+    if isinstance(result, list):
+        result = result[0] if result else None
 
-    if rows:
-        batch_id = rows[0]["id"]
-        old_qty = int(rows[0].get("quantity") or 0)
-        new_qty = old_qty + quantity
-        supabase_request(
-            "PATCH",
-            f"inventory_batches?id=eq.{request.quote(str(batch_id), safe='')}",
-            {
-    "quantity": new_qty,
-    "mrp": mrp,
-    "purchase_price": purchase_price,
-    "medicine_name": name,
-    "reference_id": reference_id,
-},
-            "return=minimal",
-        )
-    else:
-        old_qty = 0
-        new_qty = quantity
-        supabase_request(
-            "POST",
-            "inventory_batches",
-            {
-    "medicine_id": medicine_id,
-    "medicine_name": name,
-    "batch_no": batch_no,
-    "expiry": expiry,
-    "mrp": mrp,
-    "purchase_price": purchase_price,
-    "quantity": quantity,
-    "reference_id": reference_id,
-},
-            "return=minimal",
+    if not isinstance(result, dict):
+        raise RuntimeError(
+            f"Unexpected response from apply_invoice_purchase for {name}: {result!r}"
         )
 
-    print(
-        f"  BATCH: {name} | {batch_no} | expiry {expiry or 'N/A'} | "
-        f"{old_qty} + {quantity} = {new_qty}"
-    )
-
-
-def add_purchase_to_inventory(name: str, quantity: int, reference_id: str):
-    """
-    Add purchased units to the current inventory quantity.
-    Also records a purchase movement when stock_movements exists.
-    """
-    if quantity <= 0:
-        return
-
-    medicine_id = medicine_key(name)
-    current = get_inventory_record(medicine_id)
-
-    if current:
-        old_qty = int(current.get("quantity") or 0)
-        low_stock_at = int(current.get("low_stock_at") or 5)
-        new_qty = old_qty + quantity
-
-        encoded = request.quote(medicine_id, safe="")
-        supabase_request(
-            "PATCH",
-            f"inventory?medicine_id=eq.{encoded}",
-            {
-                "medicine_name": name,
-                "quantity": new_qty,
-                "low_stock_at": low_stock_at,
-                "status": stock_status(new_qty, low_stock_at),
-            },
-            "return=minimal",
-        )
-    else:
-        old_qty = 0
-        new_qty = quantity
-        low_stock_at = 5
-        supabase_request(
-            "POST",
-            "inventory",
-            {
-                "medicine_id": medicine_id,
-                "medicine_name": name,
-                "quantity": new_qty,
-                "low_stock_at": low_stock_at,
-                "status": stock_status(new_qty, low_stock_at),
-            },
-            "return=minimal",
+    status = result.get("status")
+    if status not in {"applied", "reconciled", "skipped"}:
+        raise RuntimeError(
+            f"Unexpected apply_invoice_purchase status for {name}: {result!r}"
         )
 
-    # Stock movement is useful for audit history. If the table is not present,
-    # don't undo a successful inventory update.
-    try:
-        supabase_request(
-            "POST",
-            "stock_movements",
-            {
-                "medicine_id": medicine_id,
-                "medicine_name": name,
-                "type": "purchase",
-                "quantity": quantity,
-                "reference_id": reference_id,
-                "note": f"Auto-added from invoice {reference_id}",
-            },
-            "return=minimal",
-        )
-    except RuntimeError as exc:
-        print(f"  WARNING: inventory updated but movement log failed: {exc}")
-
-    print(f"  STOCK: {name}: {old_qty} + {quantity} = {new_qty}")
+    return result
 
 
 # ── Load existing medicines ───────────────────────────────────────────────────
@@ -902,8 +806,16 @@ if aggregated:
     else:
         try:
             for item in aggregated.values():
-                # 1) Batch-level stock for POS/billing.
-                add_purchase_batch(
+                source_key = "|".join(
+                    [
+                        item["reference_id"],
+                        medicine_key(item["name"]),
+                        item["batch_no"],
+                        item["expiry"] or "",
+                    ]
+                )
+
+                result = apply_invoice_purchase(
                     item["name"],
                     item["quantity"],
                     item["batch_no"],
@@ -911,14 +823,16 @@ if aggregated:
                     item["mrp"],
                     item["purchase_price"],
                     item["reference_id"],
+                    source_key,
                 )
 
-                # 2) Aggregate medicine-level stock for storefront availability.
-                add_purchase_to_inventory(
-                    item["name"],
-                    item["quantity"],
-                    item["reference_id"],
-                )
+                if result.get("status") == "skipped":
+                    print(f"  SKIP stock already applied: {source_key}")
+                else:
+                    print(
+                        f"  ✓ STOCK APPLIED: {item['name']} | "
+                        f"{item['batch_no']} | +{item['quantity']}"
+                    )
         except Exception as exc:
             inventory_ok = False
             print(f"\nERROR: Supabase inventory update failed: {exc}")
