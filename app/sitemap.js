@@ -7,19 +7,16 @@ export default function sitemap() {
       priority: 1.0,
       changeFrequency: "daily"
     },
-
     {
       path: "/privacy",
       priority: 0.3,
       changeFrequency: "monthly"
     },
-
     {
       path: "/terms",
       priority: 0.3,
       changeFrequency: "monthly"
     },
-
     {
       path: "/delivery-policy",
       priority: 0.5,
@@ -28,7 +25,7 @@ export default function sitemap() {
   ];
 
   return pages.map((page) => ({
-    url: SITE_URL + page.path,
+    url: `${SITE_URL}${page.path}`,
     lastModified: new Date(),
     changeFrequency: page.changeFrequency,
     priority: page.priority
