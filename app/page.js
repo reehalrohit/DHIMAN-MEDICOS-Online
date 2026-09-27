@@ -225,16 +225,7 @@ export default function Home() {
           aria-label="Search medicines"
         />
       </div>
-            <div className={styles.searchWrap}>
-  <span aria-hidden="true">🔎</span>
-  <input
-    value={query}
-    onChange={(event) => setQuery(event.target.value)}
-    placeholder={`Search ${products.length || "1370+"} medicines…`}
-    aria-label="Search medicines"
-  />
-</div>
-
+            
 {/* RxNorm medicine suggestions */}
 {rxnormMatches.length > 0 && query.trim().length >= 3 && (
   <section
