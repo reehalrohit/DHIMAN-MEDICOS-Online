@@ -62,7 +62,7 @@ export default function RootLayout({ children }) {
               "@type": "Pharmacy",
               name:        "Dhiman Medicos",
               description: "Trusted medical store in Binewal, Hoshiarpur offering 1000+ medicines with instant WhatsApp ordering.",
-              url:         "https://dhiman-medicos.vercel.app",
+              url:         "https://dhiman-medicos-online.vercel.app/",
               telephone:   "+919478509980",
               priceRange:  "₹",
               address: {
