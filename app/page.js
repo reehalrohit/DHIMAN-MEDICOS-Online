@@ -225,6 +225,81 @@ export default function Home() {
           aria-label="Search medicines"
         />
       </div>
+            <div className={styles.searchWrap}>
+  <span aria-hidden="true">🔎</span>
+  <input
+    value={query}
+    onChange={(event) => setQuery(event.target.value)}
+    placeholder={`Search ${products.length || "1370+"} medicines…`}
+    aria-label="Search medicines"
+  />
+</div>
+
+{/* RxNorm medicine suggestions */}
+{rxnormMatches.length > 0 && query.trim().length >= 3 && (
+  <section
+    style={{
+      maxWidth: "1100px",
+      margin: "0 auto 14px",
+      padding: "0 20px",
+    }}
+  >
+    <div
+      style={{
+        background: "#fff",
+        border: "1px solid #e5dfd3",
+        borderRadius: "18px",
+        padding: "14px 16px",
+      }}
+    >
+      <strong>💊 Medicine name matches</strong>
+
+      <div style={{ marginTop: "10px" }}>
+        {rxnormMatches.map((match) => (
+          <button
+            key={match.rxcui}
+            type="button"
+            onClick={() => setQuery(match.name)}
+            style={{
+              display: "block",
+              width: "100%",
+              textAlign: "left",
+              border: 0,
+              background: "transparent",
+              padding: "9px 4px",
+              cursor: "pointer",
+            }}
+          >
+            <strong>{match.name}</strong>
+
+            <small
+              style={{
+                display: "block",
+                color: "#718078",
+                marginTop: "2px",
+              }}
+            >
+              RxCUI: {match.rxcui} · RxNorm reference
+            </small>
+          </button>
+        ))}
+      </div>
+
+      <small
+        style={{
+          display: "block",
+          marginTop: "8px",
+          color: "#718078",
+        }}
+      >
+        Reference information from the U.S. National Library
+        of Medicine. This is not a stock or availability listing.
+      </small>
+    </div>
+  </section>
+)}
+
+<section className={styles.hero}>
 
       <section className={styles.hero}>
         <div className={styles.heroPattern} />
