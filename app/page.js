@@ -9,6 +9,7 @@ const STORE_CART_KEY = "dm-online-cart";
 
 export default function Home() {
   const [products, setProducts] = useState([]);
+  const [rxnormMatches, setRxnormMatches] = useState([]);
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState("all");
   const [price, setPrice] = useState("all");
