@@ -3,32 +3,76 @@ import { Analytics } from "@vercel/analytics/react";
 import "./styles/thermal.css";
 
 export const metadata = {
-  title: "Dhiman Medicos – Medical Store in Binewal, Hoshiarpur | 1000+ Medicines",
+  title: "Dhiman Medicos | Medical Store in Binewal, Hoshiarpur, Punjab",
+
   description:
-    "Dhiman Medicos, Binewal — your trusted medical store in Hoshiarpur, Punjab. Browse 1000+ medicines across 21 categories. Order instantly on WhatsApp. Pain relief, diabetes, BP, antibiotics, vitamins and more.",
-  keywords:
-    "Dhiman Medicos, medical store Binewal, pharmacy Hoshiarpur, medicine shop Punjab, dawa shop Binewal, WhatsApp medicine order, online pharmacy Hoshiarpur, medicine home delivery Punjab, best medical store near Binewal",
-  authors:     [{ name: "Dhiman Medicos" }],
-  creator:     "Dhiman Medicos",
-  metadataBase: new URL("https://dhiman-medicos-online.vercel.app"),
-  alternates:  { canonical: "https://dhiman-medicos-online.vercel.app" },
+    "Dhiman Medicos is a medical store and pharmacy in Binewal, Hoshiarpur, Punjab. Browse medicines, check prices and place online orders.",
+
+  keywords: [
+    "Dhiman Medicos",
+    "medical store Binewal",
+    "pharmacy Binewal",
+    "medical store Hoshiarpur",
+    "pharmacy Hoshiarpur",
+    "medicine shop Punjab",
+    "online medicine order Binewal",
+    "medicine store near Binewal",
+    "chemist Binewal",
+    "chemist Hoshiarpur"
+  ],
+
+  authors: [
+    {
+      name: "Dhiman Medicos"
+    }
+  ],
+
+  creator: "Dhiman Medicos",
+
+  metadataBase: https://dhiman-medicos-online.vercel.app/,
+
+  alternates: {
+    canonical: https://dhiman-medicos-online.vercel.app/
+  },
+
   openGraph: {
-    title:       "Dhiman Medicos – Medical Store in Binewal, Hoshiarpur",
-    description: "1000+ medicines. Order on WhatsApp instantly. Binewal, Hoshiarpur, Punjab.",
-    url:         "https://dhiman-medicos-online.vercel.app",
-    siteName:    "Dhiman Medicos",
-    type:        "website",
-    locale:      "en_IN",
+    title:
+      "Dhiman Medicos | Medical Store in Binewal, Hoshiarpur",
+
+    description:
+      "Dhiman Medicos — medical store and pharmacy in Binewal, Hoshiarpur, Punjab.",
+
+    url: https://dhiman-medicos-online.vercel.app/,
+
+    siteName: "Dhiman Medicos",
+
+    type: "website",
+
+    locale: "en_IN"
   },
+
   twitter: {
-    card:        "summary",
-    title:       "Dhiman Medicos – Medical Store Binewal",
-    description: "1000+ medicines. Order on WhatsApp. Binewal, Hoshiarpur, Punjab.",
+    card: "summary",
+
+    title:
+      "Dhiman Medicos | Medical Store Binewal",
+
+    description:
+      "Medical store and pharmacy in Binewal, Hoshiarpur, Punjab."
   },
+
   robots: {
-    index: true, follow: true,
-    googleBot: { index: true, follow: true },
-  },
+    index: true,
+    follow: true,
+
+    googleBot: {
+      index: true,
+      follow: true,
+      "max-image-preview": "large",
+      "max-snippet": -1,
+      "max-video-preview": -1
+    }
+  }
 };
 
 export default function RootLayout({ children }) {
