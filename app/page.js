@@ -226,8 +226,8 @@ export default function Home() {
         />
       </div>
             
-{/* RxNorm medicine suggestions */}
-{rxnormMatches.length > 0 && query.trim().length >= 3 && (
+{/* CDCI India medicine suggestions */}
+{indiaMatches.length > 0 && query.trim().length >= 2 && (
   <section
     style={{
       maxWidth: "1100px",
@@ -243,12 +243,12 @@ export default function Home() {
         padding: "14px 16px",
       }}
     >
-      <strong>💊 Medicine name matches</strong>
+      <strong>💊 Indian medicine matches</strong>
 
       <div style={{ marginTop: "10px" }}>
-        {rxnormMatches.map((match) => (
+        {indiaMatches.map((match, index) => (
           <button
-            key={match.rxcui}
+            key={`${match.name}-${index}`}
             type="button"
             onClick={() => setQuery(match.name)}
             style={{
@@ -263,15 +263,17 @@ export default function Home() {
           >
             <strong>{match.name}</strong>
 
-            <small
-              style={{
-                display: "block",
-                color: "#718078",
-                marginTop: "2px",
-              }}
-            >
-              RxCUI: {match.rxcui} · RxNorm reference
-            </small>
+            {match.generic && (
+              <small
+                style={{
+                  display: "block",
+                  color: "#718078",
+                  marginTop: "2px",
+                }}
+              >
+                Generic: {match.generic}
+              </small>
+            )}
           </button>
         ))}
       </div>
@@ -283,8 +285,9 @@ export default function Home() {
           color: "#718078",
         }}
       >
-        Reference information from the U.S. National Library
-        of Medicine. This is not a stock or availability listing.
+        Reference data: Common Drug Codes for India (CDCI),
+        C-DAC / NRCeS. This is reference data, not stock or
+        availability information.
       </small>
     </div>
   </section>
