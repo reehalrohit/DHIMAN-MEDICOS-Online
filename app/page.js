@@ -299,7 +299,6 @@ export default function Home() {
   </section>
 )}
 
-<section className={styles.hero}>
 
       <section className={styles.hero}>
         <div className={styles.heroPattern} />
