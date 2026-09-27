@@ -58,8 +58,8 @@ export default function Home() {
   useEffect(() => {
   const q = query.trim();
 
-  if (q.length < 3) {
-    setRxnormMatches([]);
+  if (q.length < 2) {
+    setIndiaMatches([]);
     return;
   }
 
@@ -68,22 +68,22 @@ export default function Home() {
   const timer = setTimeout(async () => {
     try {
       const response = await fetch(
-        `/api/rxnorm/search?q=${encodeURIComponent(q)}`
+        `/api/india-medicine/search?q=${encodeURIComponent(q)}`
       );
 
       const data = await response.json();
 
       if (!cancelled) {
-        setRxnormMatches(
+        setIndiaMatches(
           data.success ? data.matches || [] : []
         );
       }
     } catch {
       if (!cancelled) {
-        setRxnormMatches([]);
+        setIndiaMatches([]);
       }
     }
-  }, 450);
+  }, 300);
 
   return () => {
     cancelled = true;
