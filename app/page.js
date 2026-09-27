@@ -56,6 +56,42 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
+  const q = query.trim();
+
+  if (q.length < 3) {
+    setRxnormMatches([]);
+    return;
+  }
+
+  let cancelled = false;
+
+  const timer = setTimeout(async () => {
+    try {
+      const response = await fetch(
+        `/api/rxnorm/search?q=${encodeURIComponent(q)}`
+      );
+
+      const data = await response.json();
+
+      if (!cancelled) {
+        setRxnormMatches(
+          data.success ? data.matches || [] : []
+        );
+      }
+    } catch {
+      if (!cancelled) {
+        setRxnormMatches([]);
+      }
+    }
+  }, 450);
+
+  return () => {
+    cancelled = true;
+    clearTimeout(timer);
+  };
+}, [query]);
+
+  useEffect(() => {
     try {
       localStorage.setItem(STORE_CART_KEY, JSON.stringify(cart));
     } catch {}
