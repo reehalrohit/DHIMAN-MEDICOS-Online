@@ -112,34 +112,59 @@ function InvoiceDocument({ sale, paper }) {
   const discount = num(sale?.discount);
   const total = num(sale?.total);
   const amountPaid = num(sale?.amount_paid);
-  const balance = Math.max(0, num(sale?.balance));
-  const totalSaved = Math.max(0, discount);
-  const discountPercent = subtotal > 0 ? (totalSaved / subtotal) * 100 : 0;
-  const isPaid = balance <= 0;
   const isA4 = paper === "a4";
 
-  // POS stores the discount at invoice level. For the invoice table,
-  // allocate that same effective percentage proportionally to each item
-  // so every line shows its share of the recorded total discount.
-  const itemDiscountedRows = rows.map((row, index) => {
-    const isLast = index === rows.length - 1;
-    const allocatedBefore = rows
-      .slice(0, index)
-      .reduce(
-        (sum, priorRow) =>
-          sum + Math.round((priorRow.grossAmount * discountPercent / 100) * 100) / 100,
-        0
-      );
-    const calculated = Math.round((row.grossAmount * discountPercent / 100) * 100) / 100;
-    const lineDiscount = isLast
-      ? Math.max(0, Math.min(row.grossAmount, Math.round((totalSaved - allocatedBefore) * 100) / 100))
-      : Math.max(0, Math.min(row.grossAmount, calculated));
+  // There are two savings layers:
+  // 1) MRP -> RATE savings already reflected in each item's selling rate.
+  // 2) An optional invoice-level discount entered at POS.
+  const itemRowsWithSavings = rows.map((row) => {
+    const mrpGrossAmount = row.mrp > 0 ? row.mrp * row.qty : 0;
+    const itemPriceSavings = Math.max(0, mrpGrossAmount - row.grossAmount);
+    return { ...row, mrpGrossAmount, itemPriceSavings };
+  });
+
+  const billDiscount = Math.max(0, discount);
+  const itemPriceSavingsTotal = itemRowsWithSavings.reduce(
+    (sum, row) => sum + row.itemPriceSavings,
+    0
+  );
+  const mrpSubtotal = itemRowsWithSavings.reduce(
+    (sum, row) => sum + row.mrpGrossAmount,
+    0
+  );
+  const totalSaved = itemPriceSavingsTotal + billDiscount;
+  const billDiscountPercent = subtotal > 0 ? (billDiscount / subtotal) * 100 : 0;
+  const due = Math.max(0, total - amountPaid);
+  const change = Math.max(0, amountPaid - total);
+  const isPaid = due <= 0;
+
+  // Allocate invoice-level discount by selling-rate share and combine it with
+  // the MRP -> RATE saving so DIS represents the actual saving on each item.
+  let allocatedBillDiscount = 0;
+  const itemDiscountedRows = itemRowsWithSavings.map((row, index) => {
+    const isLast = index === itemRowsWithSavings.length - 1;
+    let lineBillDiscount = 0;
+
+    if (billDiscount > 0 && subtotal > 0) {
+      const calculated = Math.round((row.grossAmount / subtotal * billDiscount) * 100) / 100;
+      lineBillDiscount = isLast
+        ? Math.max(0, Math.round((billDiscount - allocatedBillDiscount) * 100) / 100)
+        : Math.max(0, Math.min(row.grossAmount, calculated));
+      allocatedBillDiscount += lineBillDiscount;
+    }
+
+    const lineDiscountAmount = Math.max(0, row.itemPriceSavings + lineBillDiscount);
+    const lineDiscountPercent =
+      row.mrpGrossAmount > 0
+        ? (lineDiscountAmount / row.mrpGrossAmount) * 100
+        : billDiscountPercent;
 
     return {
       ...row,
-      discountPercent,
-      discountAmount: lineDiscount,
-      amount: Math.max(0, row.grossAmount - lineDiscount),
+      lineBillDiscount,
+      discountPercent: lineDiscountPercent,
+      discountAmount: lineDiscountAmount,
+      amount: Math.max(0, row.grossAmount - lineBillDiscount),
     };
   });
 
@@ -207,7 +232,7 @@ function InvoiceDocument({ sale, paper }) {
             <div className="section-kicker">PAYMENT</div>
             <div className="payment-method">{paymentLabel(sale?.payment_method)}</div>
             <div className="payment-line"><span>Paid</span><strong>{money(amountPaid)}</strong></div>
-            <div className="payment-line"><span>Due</span><strong>{money(balance)}</strong></div>
+            <div className="payment-line"><span>{change > 0 ? "Change" : "Due"}</span><strong>{money(change > 0 ? change : due)}</strong></div>
           </div>
         </section>
 
@@ -285,13 +310,16 @@ function InvoiceDocument({ sale, paper }) {
 
           <div className="summary-panel">
             <div className="summary-row"><span>Subtotal</span><strong>{money(subtotal)}</strong></div>
-            <div className="summary-row"><span>Discount</span><strong>{discountPercent.toFixed(2)}% {discount > 0 ? `(- ${money(discount)})` : ""}</strong></div>
+            {itemPriceSavingsTotal > 0 && (
+              <div className="summary-row"><span>Item/MRP Discount</span><strong>{(mrpSubtotal > 0 ? (itemPriceSavingsTotal / mrpSubtotal) * 100 : 0).toFixed(2)}% (- {money(itemPriceSavingsTotal)})</strong></div>
+            )}
+            <div className="summary-row"><span>Bill Discount</span><strong>{billDiscountPercent.toFixed(2)}% {billDiscount > 0 ? `(- ${money(billDiscount)})` : ""}</strong></div>
             <div className="summary-row"><span>Total Saved</span><strong>{money(totalSaved)}</strong></div>
             <div className="grand-total-row">
               <span>TO PAY</span>
               <strong>{money(total)}</strong>
             </div>
-            <div className="summary-row paid-due-row"><span>PAID / DUE</span><strong>{money(amountPaid)} / {money(balance)}</strong></div>
+            <div className="summary-row paid-due-row"><span>PAID / {change > 0 ? "CHANGE" : "DUE"}</span><strong>{money(amountPaid)} / {money(change > 0 ? change : due)}</strong></div>
           </div>
         </section>
 
@@ -508,7 +536,7 @@ export default function SalesHistoryPage() {
             </div>
 
             <div className="format-bar screen-only">
-              <div className="format-label">Output format</div>
+                            <div className="format-label">Output format</div>
               <div className="format-tabs">
                 {Object.entries(PAPER_OPTIONS).map(([key, option]) => (
                   <button key={key} type="button" className={paper === key ? "format-tab active" : "format-tab"} onClick={() => selectPaper(key)}>
@@ -736,4 +764,4 @@ export default function SalesHistoryPage() {
       `}</style>
     </>
   );
-}
+        }
