@@ -79,7 +79,7 @@ function normaliseItem(item, index) {
     0
   );
   const mrp = num(item?.mrp ?? item?.max_retail_price, 0);
-  const amount = num(
+  const grossAmount = num(
     item?.total ?? item?.line_total,
     qty * rate
   );
@@ -99,8 +99,8 @@ function normaliseItem(item, index) {
     omrp: num(item?.omrp ?? item?.original_mrp, 0),
     mrp,
     rate,
-    discountPercent: num(item?.discount_percent, num(item?.discount, 0)),
-    amount,
+    storedDiscountPercent: num(item?.discount_percent, num(item?.discount, 0)),
+    grossAmount,
   };
 }
 
@@ -117,6 +117,31 @@ function InvoiceDocument({ sale, paper }) {
   const discountPercent = subtotal > 0 ? (totalSaved / subtotal) * 100 : 0;
   const isPaid = balance <= 0;
   const isA4 = paper === "a4";
+
+  // POS stores the discount at invoice level. For the invoice table,
+  // allocate that same effective percentage proportionally to each item
+  // so every line shows its share of the recorded total discount.
+  const itemDiscountedRows = rows.map((row, index) => {
+    const isLast = index === rows.length - 1;
+    const allocatedBefore = rows
+      .slice(0, index)
+      .reduce(
+        (sum, priorRow) =>
+          sum + Math.round((priorRow.grossAmount * discountPercent / 100) * 100) / 100,
+        0
+      );
+    const calculated = Math.round((row.grossAmount * discountPercent / 100) * 100) / 100;
+    const lineDiscount = isLast
+      ? Math.max(0, Math.min(row.grossAmount, Math.round((totalSaved - allocatedBefore) * 100) / 100))
+      : Math.max(0, Math.min(row.grossAmount, calculated));
+
+    return {
+      ...row,
+      discountPercent,
+      discountAmount: lineDiscount,
+      amount: Math.max(0, row.grossAmount - lineDiscount),
+    };
+  });
 
   const customerName = text(
     sale?.customer_name,
@@ -211,11 +236,12 @@ function InvoiceDocument({ sale, paper }) {
                   <th>QTY</th>
                   <th>MRP</th>
                   <th>RATE</th>
+                  <th>DIS</th>
                   <th>AMT</th>
                 </tr>
               </thead>
               <tbody>
-                {rows.map((row) => (
+                {itemDiscountedRows.map((row) => (
                   <tr key={row.key}>
                     <td>{row.sr}</td>
                     <td className="left description-cell">{row.description}</td>
@@ -229,6 +255,16 @@ function InvoiceDocument({ sale, paper }) {
                     <td>{row.qty}</td>
                     <td>{row.mrp > 0 ? row.mrp.toFixed(2) : "-"}</td>
                     <td>{row.rate.toFixed(2)}</td>
+                    <td>
+                      {row.discountAmount > 0 ? (
+                        <span className="item-discount">
+                          {row.discountPercent.toFixed(2)}%<br />
+                          -{money(row.discountAmount)}
+                        </span>
+                      ) : (
+                        "-"
+                      )}
+                    </td>
                     <td className="amount-cell">{row.amount.toFixed(2)}</td>
                   </tr>
                 ))}
