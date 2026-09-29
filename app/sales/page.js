@@ -113,6 +113,7 @@ function InvoiceDocument({ sale, paper }) {
   const total = num(sale?.total);
   const amountPaid = num(sale?.amount_paid);
   const balance = Math.max(0, num(sale?.balance));
+  const change = Math.max(0, amountPaid - total);
   const totalSaved = Math.max(0, discount);
   const discountPercent = subtotal > 0 ? (totalSaved / subtotal) * 100 : 0;
   const isPaid = balance <= 0;
@@ -182,7 +183,11 @@ function InvoiceDocument({ sale, paper }) {
             <div className="section-kicker">PAYMENT</div>
             <div className="payment-method">{paymentLabel(sale?.payment_method)}</div>
             <div className="payment-line"><span>Paid</span><strong>{money(amountPaid)}</strong></div>
-            <div className="payment-line"><span>Due</span><strong>{money(balance)}</strong></div>
+            {change > 0 ? (
+              <div className="payment-line"><span>Change</span><strong>{money(change)}</strong></div>
+            ) : (
+              <div className="payment-line"><span>Due</span><strong>{money(balance)}</strong></div>
+            )}
           </div>
         </section>
 
@@ -253,13 +258,13 @@ function InvoiceDocument({ sale, paper }) {
 
           <div className="summary-panel">
             <div className="summary-row"><span>Subtotal</span><strong>{money(subtotal)}</strong></div>
-            <div className="summary-row"><span>Discount</span><strong>{discountPercent.toFixed(2)}% {discount > 0 ? `(- ${money(discount)})` : ""}</strong></div>
+            <div className="summary-row"><span>Discount</span><strong>{discountPercent.toFixed(2)}% {discount > 0 ? `(- ${money(discount)})` : "(- ₹0.00)"}</strong></div>
             <div className="summary-row"><span>Total Saved</span><strong>{money(totalSaved)}</strong></div>
             <div className="grand-total-row">
               <span>TO PAY</span>
               <strong>{money(total)}</strong>
             </div>
-            <div className="summary-row paid-due-row"><span>PAID / DUE</span><strong>{money(amountPaid)} / {money(balance)}</strong></div>
+            <div className="summary-row paid-due-row"><span>{change > 0 ? "PAID / CHANGE" : "PAID / DUE"}</span><strong>{money(amountPaid)} / {money(change > 0 ? change : balance)}</strong></div>
           </div>
         </section>
 
