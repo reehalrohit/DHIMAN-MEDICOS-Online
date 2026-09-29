@@ -536,7 +536,7 @@ export default function SalesHistoryPage() {
             </div>
 
             <div className="format-bar screen-only">
-                            <div className="format-label">Output format</div>
+              <div className="format-label">Output format</div>
               <div className="format-tabs">
                 {Object.entries(PAPER_OPTIONS).map(([key, option]) => (
                   <button key={key} type="button" className={paper === key ? "format-tab active" : "format-tab"} onClick={() => selectPaper(key)}>
@@ -764,4 +764,4 @@ export default function SalesHistoryPage() {
       `}</style>
     </>
   );
-        }
+}
