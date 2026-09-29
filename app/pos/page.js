@@ -304,8 +304,10 @@ export default function POSPage() {
       : Math.min(subtotal, discountInput);
 
   const total = Math.max(0, subtotal - safeDiscount);
+  const discountPercent = subtotal > 0 ? (safeDiscount / subtotal) * 100 : 0;
   const paid = amountPaid === "" ? total : Math.max(0, Number(amountPaid || 0));
-  const balance = total - paid;
+  const balance = Math.max(0, total - paid);
+  const change = Math.max(0, paid - total);
 
   async function checkout() {
     try {
