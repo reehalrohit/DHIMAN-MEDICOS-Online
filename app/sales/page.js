@@ -113,7 +113,8 @@ function InvoiceDocument({ sale, paper }) {
   const total = num(sale?.total);
   const amountPaid = num(sale?.amount_paid);
   const balance = Math.max(0, num(sale?.balance));
-  const savings = Math.max(0, subtotal - total);
+  const totalSaved = Math.max(0, discount);
+  const discountPercent = subtotal > 0 ? (totalSaved / subtotal) * 100 : 0;
   const isPaid = balance <= 0;
   const isA4 = paper === "a4";
 
@@ -252,10 +253,8 @@ function InvoiceDocument({ sale, paper }) {
 
           <div className="summary-panel">
             <div className="summary-row"><span>Subtotal</span><strong>{money(subtotal)}</strong></div>
-            <div className="summary-row"><span>Savings</span><strong>{money(savings)}</strong></div>
-            {discount > 0 && (
-              <div className="summary-row"><span>Additional discount</span><strong>- {money(discount)}</strong></div>
-            )}
+            <div className="summary-row"><span>Discount</span><strong>{discountPercent.toFixed(2)}% {discount > 0 ? `(- ${money(discount)})` : ""}</strong></div>
+            <div className="summary-row"><span>Total Saved</span><strong>{money(totalSaved)}</strong></div>
             <div className="grand-total-row">
               <span>TO PAY</span>
               <strong>{money(total)}</strong>
