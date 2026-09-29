@@ -304,6 +304,23 @@ export default function POSPage() {
       : Math.min(subtotal, discountInput);
 
   const total = Math.max(0, subtotal - safeDiscount);
+  const mrpSubtotal = cart.reduce(
+    (sum, item) => sum + Math.max(0, Number(item.mrp || 0)) * Number(item.quantity || 0),
+    0
+  );
+  const itemPriceSavingsTotal = cart.reduce(
+    (sum, item) =>
+      sum +
+      Math.max(
+        0,
+        (Number(item.mrp || 0) - Number(item.unit_price || 0)) * Number(item.quantity || 0)
+      ),
+    0
+  );
+  const totalSaved = itemPriceSavingsTotal + safeDiscount;
+  const effectiveDiscountPercent =
+    mrpSubtotal > 0 ? (totalSaved / mrpSubtotal) * 100 : 0;
+  const billDiscountPercent = subtotal > 0 ? (safeDiscount / subtotal) * 100 : 0;
   const paid = amountPaid === "" ? total : Math.max(0, Number(amountPaid || 0));
   const balance = total - paid;
 
@@ -459,13 +476,21 @@ export default function POSPage() {
             {cart.map((item, index) => {
               const availableBatches = getBatches(item.medicine_id);
               const lineTotal = Number(item.quantity) * Number(item.unit_price);
-              const effectiveDiscountPercent =
-                subtotal > 0 && safeDiscount > 0 ? (safeDiscount / subtotal) * 100 : 0;
-              const lineDiscount =
-                effectiveDiscountPercent > 0
-                  ? (lineTotal * effectiveDiscountPercent) / 100
+              const lineItemSavings = Math.max(
+                0,
+                (Number(item.mrp || 0) - Number(item.unit_price || 0)) * Number(item.quantity || 0)
+              );
+              const lineBillDiscount =
+                subtotal > 0 && safeDiscount > 0
+                  ? (lineTotal * safeDiscount) / subtotal
                   : 0;
-              const lineNetTotal = Math.max(0, lineTotal - lineDiscount);
+              const lineDiscountAmount = lineItemSavings + lineBillDiscount;
+              const lineMrpTotal = Number(item.mrp || 0) * Number(item.quantity || 0);
+              const lineDiscountPercent =
+                lineMrpTotal > 0
+                  ? (lineDiscountAmount / lineMrpTotal) * 100
+                  : billDiscountPercent;
+              const lineNetTotal = Math.max(0, lineTotal - lineBillDiscount);
 
               return (
                 <div style={styles.cartItem} key={`${item.medicine_id}-${item.batch_id}-${index}`}>
@@ -510,8 +535,8 @@ export default function POSPage() {
                   <div style={styles.itemFooter}>
                     <span style={styles.muted}>
                       Batch stock: {item.batch_quantity}
-                      {lineDiscount > 0 && (
-                        <> • {effectiveDiscountPercent.toFixed(2)}% off · Saved {money(lineDiscount)}</>
+                      {lineDiscountAmount > 0 && (
+                        <> • {lineDiscountPercent.toFixed(2)}% off · Saved {money(lineDiscountAmount)}</>
                       )}
                     </span>
                     <strong>{money(lineNetTotal)}</strong>
@@ -588,112 +613,4 @@ export default function POSPage() {
                     setDiscount(String(value));
                   }}
                 >
-                  {value}%
-                </button>
-              ))}
-
-              <button
-                type="button"
-                style={styles.discountPreset}
-                onClick={() => {
-                  setDiscount("");
-                  setDiscountType("amount");
-                }}
-              >
-                Clear
-              </button>
-            </div>
-
-            {safeDiscount > 0 && (
-              <small style={styles.discountHint}>
-                Applied: {money(safeDiscount)}
-              </small>
-            )}
-          </div>
-
-          <label style={styles.labelNoMargin}>
-            Amount Paid
-            <input
-              type="number"
-              min="0"
-              step="0.01"
-              style={styles.input}
-              value={amountPaid}
-              placeholder={total.toFixed(2)}
-              onChange={(event) => setAmountPaid(event.target.value)}
-            />
-          </label>
-        </div>
-
-        <div style={styles.summary}>
-          <div style={styles.summaryRow}><span>Subtotal</span><span>{money(subtotal)}</span></div>
-          <div style={styles.summaryRow}><span>Discount</span><span>{subtotal > 0 ? `${((safeDiscount / subtotal) * 100).toFixed(2)}%` : "0.00%"} · - {money(safeDiscount)}</span></div>
-          <div style={styles.summaryRow}><span>Total Saved</span><span>{money(safeDiscount)}</span></div>
-          <div style={styles.totalRow}><strong>Total</strong><strong>{money(total)}</strong></div>
-          <div style={styles.summaryRow}><span>Amount Paid</span><span>{money(paid)}</span></div>
-          <div style={styles.summaryRow}>
-            <span>{balance >= 0 ? "Balance Due" : "Change"}</span>
-            <strong>{money(Math.abs(balance))}</strong>
-          </div>
-        </div>
-
-        <button
-          type="button"
-          style={{
-            ...styles.checkoutButton,
-            opacity: checkingOut || cart.length === 0 ? 0.55 : 1,
-          }}
-          disabled={checkingOut || cart.length === 0}
-          onClick={checkout}
-        >
-          {checkingOut ? "Processing Sale..." : `Complete Sale • ${money(total)}`}
-        </button>
-      </section>
-    </main>
-  );
-}
-
-const styles = {
-  page: { maxWidth: 900, margin: "0 auto", padding: "20px 14px 80px" },
-  header: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginBottom: 20 },
-  title: { margin: 0, fontSize: 28 },
-  subtitle: { marginTop: 4, opacity: 0.6 },
-  card: { padding: 16, marginBottom: 16, border: "1px solid #ddd", borderRadius: 16 },
-  sectionTitle: { margin: "0 0 14px", fontSize: 20 },
-  sectionTitleNoMargin: { margin: 0, fontSize: 20 },
-  sectionHeader: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 },
-  searchInput: { width: "100%", boxSizing: "border-box", padding: 14, fontSize: 16, border: "1px solid #bbb", borderRadius: 12 },
-  results: { marginTop: 10, border: "1px solid #ddd", borderRadius: 12, overflow: "hidden" },
-  result: { width: "100%", padding: 13, border: 0, borderBottom: "1px solid #eee", background: "transparent", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, textAlign: "left", cursor: "pointer" },
-  resultLeft: { display: "flex", flexDirection: "column", gap: 3 },
-  muted: { fontSize: 13, opacity: 0.65 },
-  empty: { padding: "22px 10px", textAlign: "center", opacity: 0.6 },
-  cartList: { display: "flex", flexDirection: "column", gap: 12 },
-  cartItem: { padding: 13, border: "1px solid #ddd", borderRadius: 12 },
-  itemHeader: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10, marginBottom: 12 },
-  itemFooter: { display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 12 },
-  label: { display: "flex", flexDirection: "column", gap: 6, marginBottom: 12, fontSize: 14, fontWeight: 600 },
-  labelNoMargin: { display: "flex", flexDirection: "column", gap: 6, fontSize: 14, fontWeight: 600, flex: 1, minWidth: 0 },
-  discountRow: { display: "flex", gap: 7, alignItems: "stretch" },
-  discountType: { minWidth: 105, padding: 11, fontSize: 14, border: "1px solid #bbb", borderRadius: 9, background: "#fff" },
-  discountPresets: { display: "flex", flexWrap: "wrap", gap: 6, marginTop: 7 },
-  discountPreset: { padding: "6px 10px", border: "1px solid #bbb", borderRadius: 999, background: "#fff", cursor: "pointer", fontSize: 12, fontWeight: 700 },
-  discountHint: { display: "block", marginTop: 6, fontSize: 12, opacity: 0.7 },
-  fieldTitle: { marginBottom: 6, fontSize: 14, fontWeight: 600 },
-  input: { width: "100%", boxSizing: "border-box", padding: 11, fontSize: 15, border: "1px solid #bbb", borderRadius: 9 },
-  twoColumns: { display: "flex", gap: 12, flexWrap: "wrap" },
-  quantityBox: { display: "flex", alignItems: "center" },
-  quantityButton: { width: 42, height: 42, border: "1px solid #bbb", background: "transparent", fontSize: 20, cursor: "pointer" },
-  quantityInput: { width: 65, height: 42, boxSizing: "border-box", borderTop: "1px solid #bbb", borderBottom: "1px solid #bbb", borderLeft: 0, borderRight: 0, textAlign: "center", fontSize: 16 },
-  removeButton: { width: 34, height: 34, border: 0, borderRadius: 8, fontSize: 22, cursor: "pointer" },
-  textButton: { border: 0, background: "transparent", cursor: "pointer", fontWeight: 600 },
-  secondaryButton: { padding: "10px 14px", border: "1px solid #bbb", borderRadius: 10, background: "transparent", cursor: "pointer" },
-  summary: { marginTop: 18, paddingTop: 12, borderTop: "1px solid #ddd" },
-  summaryRow: { display: "flex", justifyContent: "space-between", padding: "6px 0" },
-  totalRow: { display: "flex", justifyContent: "space-between", padding: "12px 0", margin: "5px 0", fontSize: 21, borderTop: "1px solid #ddd", borderBottom: "1px solid #ddd" },
-  checkoutButton: { width: "100%", padding: 15, marginTop: 16, border: 0, borderRadius: 12, background: "#111", color: "#fff", fontSize: 17, fontWeight: 700, cursor: "pointer" },
-  message: { padding: 12, marginBottom: 15, borderRadius: 10 },
-  successMessage: { background: "#e7f6eb", color: "#17652b" },
-  errorMessage: { background: "#fdeaea", color: "#a71919" },
-  invoiceBox: { padding: 14, marginBottom: 16, border: "1px solid #b8dfc1", borderRadius: 12 },
-};
+     
