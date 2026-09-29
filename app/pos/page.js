@@ -304,10 +304,8 @@ export default function POSPage() {
       : Math.min(subtotal, discountInput);
 
   const total = Math.max(0, subtotal - safeDiscount);
-  const discountPercent = subtotal > 0 ? (safeDiscount / subtotal) * 100 : 0;
   const paid = amountPaid === "" ? total : Math.max(0, Number(amountPaid || 0));
-  const balance = Math.max(0, total - paid);
-  const change = Math.max(0, paid - total);
+  const balance = total - paid;
 
   async function checkout() {
     try {
@@ -461,6 +459,13 @@ export default function POSPage() {
             {cart.map((item, index) => {
               const availableBatches = getBatches(item.medicine_id);
               const lineTotal = Number(item.quantity) * Number(item.unit_price);
+              const effectiveDiscountPercent =
+                subtotal > 0 && safeDiscount > 0 ? (safeDiscount / subtotal) * 100 : 0;
+              const lineDiscount =
+                effectiveDiscountPercent > 0
+                  ? (lineTotal * effectiveDiscountPercent) / 100
+                  : 0;
+              const lineNetTotal = Math.max(0, lineTotal - lineDiscount);
 
               return (
                 <div style={styles.cartItem} key={`${item.medicine_id}-${item.batch_id}-${index}`}>
@@ -503,8 +508,13 @@ export default function POSPage() {
                   </div>
 
                   <div style={styles.itemFooter}>
-                    <span style={styles.muted}>Batch stock: {item.batch_quantity}</span>
-                    <strong>{money(lineTotal)}</strong>
+                    <span style={styles.muted}>
+                      Batch stock: {item.batch_quantity}
+                      {lineDiscount > 0 && (
+                        <> • {effectiveDiscountPercent.toFixed(2)}% off · Saved {money(lineDiscount)}</>
+                      )}
+                    </span>
+                    <strong>{money(lineNetTotal)}</strong>
                   </div>
                 </div>
               );
@@ -617,7 +627,8 @@ export default function POSPage() {
 
         <div style={styles.summary}>
           <div style={styles.summaryRow}><span>Subtotal</span><span>{money(subtotal)}</span></div>
-          <div style={styles.summaryRow}><span>Discount</span><span>- {money(safeDiscount)}</span></div>
+          <div style={styles.summaryRow}><span>Discount</span><span>{subtotal > 0 ? `${((safeDiscount / subtotal) * 100).toFixed(2)}%` : "0.00%"} · - {money(safeDiscount)}</span></div>
+          <div style={styles.summaryRow}><span>Total Saved</span><span>{money(safeDiscount)}</span></div>
           <div style={styles.totalRow}><strong>Total</strong><strong>{money(total)}</strong></div>
           <div style={styles.summaryRow}><span>Amount Paid</span><span>{money(paid)}</span></div>
           <div style={styles.summaryRow}>
