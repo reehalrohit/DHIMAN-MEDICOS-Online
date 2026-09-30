@@ -175,7 +175,7 @@ def main():
     api=os.environ.get("SUPABASE_URL","").rstrip("/"); key=os.environ.get("SUPABASE_SERVICE_ROLE_KEY","")
     if not api or not key:
         print("Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY",file=sys.stderr); return 2
-    s=requests.Session(); s.headers.update({"User-Agent":UA,"Accept":"text/html,application/xhtml+xml"})
+    s=requests.Session(); s.headers.update({"User-Agent":UA})
     inv=inventory_map(s,api,key); print(f"Inventory medicine names available: {len(inv)}")
     univ=[]; cipla=[]; uu=[]; cu=[]
     if robots_ok(UNIVENTIS_BASE,[UNIVENTIS_URL]):
