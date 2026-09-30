@@ -34,7 +34,7 @@ def clean(v):
     return v or None
 
 def get(s, url):
-    r = s.get(url, timeout=TIMEOUT)
+    r = s.get(url,headers={"Accept": "text/html,application/xhtml+xml"},timeout=TIMEOUT)
     r.raise_for_status()
     return r.text
 
