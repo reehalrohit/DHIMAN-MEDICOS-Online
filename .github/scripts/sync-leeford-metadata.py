@@ -28,7 +28,7 @@ def norm(value: str) -> str:
 
 
 def fetch(session: requests.Session, url: str) -> str:
-    r = session.get(url, timeout=TIMEOUT)
+    r = session.get(url,headers={"Accept": "text/html,application/xhtml+xml"},timeout=TIMEOUT,)
     r.raise_for_status()
     return r.text
 
