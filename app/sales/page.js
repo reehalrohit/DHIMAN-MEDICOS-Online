@@ -310,11 +310,18 @@ function InvoiceDocument({ sale, paper }) {
 
           <div className="summary-panel">
             <div className="summary-row"><span>Subtotal</span><strong>{money(subtotal)}</strong></div>
-            {itemPriceSavingsTotal > 0 && (
-              <div className="summary-row"><span>Item/MRP Discount</span><strong>{(mrpSubtotal > 0 ? (itemPriceSavingsTotal / mrpSubtotal) * 100 : 0).toFixed(2)}% (- {money(itemPriceSavingsTotal)})</strong></div>
+            {mrpSubtotal > 0 && (
+              <div className="summary-row"><span>MRP Value</span><strong>{money(mrpSubtotal)}</strong></div>
             )}
-            <div className="summary-row"><span>Bill Discount</span><strong>{billDiscountPercent.toFixed(2)}% {billDiscount > 0 ? `(- ${money(billDiscount)})` : ""}</strong></div>
-            <div className="summary-row"><span>Total Saved</span><strong>{money(totalSaved)}</strong></div>
+            {itemPriceSavingsTotal > 0 && (
+              <div className="summary-row"><span>MRP Saving</span><strong>{money(itemPriceSavingsTotal)} · {(mrpSubtotal > 0 ? (itemPriceSavingsTotal / mrpSubtotal) * 100 : 0).toFixed(2)}%</strong></div>
+            )}
+            {billDiscount > 0 && (
+              <div className="summary-row"><span>Bill Discount</span><strong>{money(billDiscount)} · {billDiscountPercent.toFixed(2)}%</strong></div>
+            )}
+            {totalSaved > 0 && (
+              <div className="summary-row"><span>Total Saved</span><strong>{money(totalSaved)}</strong></div>
+            )}
             <div className="grand-total-row">
               <span>TO PAY</span>
               <strong>{money(total)}</strong>
