@@ -125,7 +125,7 @@ def main() -> int:
         return 3
 
     s = requests.Session()
-    s.headers.update({"User-Agent": UA, "Accept": "text/html,application/xhtml+xml"})
+    s.headers.update({"User-Agent": UA})
 
     catalog = fetch(s, CATALOG_URL)
     soup = BeautifulSoup(catalog, "html.parser")
