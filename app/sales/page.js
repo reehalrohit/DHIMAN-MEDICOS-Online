@@ -93,6 +93,10 @@ function normaliseItem(item, index) {
     schedule: text(item?.schedule ?? item?.sch),
     rack: text(item?.rack),
     hsn: text(item?.hsn ?? item?.hsn_code),
+    gstRate: num(item?.gst_rate ?? item?.gst, 0),
+    cgstRate: num(item?.cgst_rate, 0),
+    sgstRate: num(item?.sgst_rate, 0),
+    igstRate: num(item?.igst_rate, 0),
     batch: text(item?.batch_no ?? item?.batch_number ?? item?.batch),
     expiry: text(item?.expiry_date ?? item?.expiry ?? item?.exp),
     qty,
@@ -256,6 +260,7 @@ function InvoiceDocument({ sale, paper }) {
                   <th>SCH</th>
                   <th>RACK</th>
                   <th>HSN</th>
+                  <th>GST</th>
                   <th>BATCH</th>
                   <th>EXP</th>
                   <th>QTY</th>
@@ -275,6 +280,7 @@ function InvoiceDocument({ sale, paper }) {
                     <td>{row.schedule}</td>
                     <td>{row.rack}</td>
                     <td>{row.hsn}</td>
+                    <td>{row.gstRate > 0 ? `${row.gstRate.toFixed(2)}%` : "-"}</td>
                     <td>{row.batch}</td>
                     <td>{row.expiry}</td>
                     <td>{row.qty}</td>
@@ -485,7 +491,7 @@ export default function SalesHistoryPage() {
             <button type="button" className="secondary" onClick={loadSales} disabled={loading}>
               {loading ? "Refreshing…" : "↻ Refresh"}
             </button>
-            <Link href="/" className="primary">← Back to POS</Link>
+            <Link href="/pos" className="primary">← Back to POS</Link>
           </div>
         </header>
 
