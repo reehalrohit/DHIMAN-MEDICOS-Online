@@ -4,6 +4,8 @@ on:
   push:
     paths:
       - "invoices/**"
+      - ".github/scripts/process-invoice.py"
+      - "supabase/migrations/**"
   workflow_dispatch:
 
 # Never run two invoice imports against Supabase/main at the same time.
