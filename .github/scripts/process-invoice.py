@@ -450,56 +450,103 @@ def medicine_key(name: str) -> str:
     return re.sub(r"^-+|-+$", "", re.sub(r"[^A-Z0-9]+", "-", str(name or "").strip().upper()))
 
 
-def parse_quantity(row) -> int:
-    """
-    Parse purchased QTY only.
-    F.QTY/free scheme quantity is deliberately ignored.
+def normalise_header(value: str) -> str:
+    """Normalise vendor-export headings so minor punctuation/case changes do not break imports."""
+    return re.sub(r"[^A-Z0-9]+", "", str(value or "").strip().upper())
 
-    Rule:
-      fractional part > 0.5  -> round up
-      fractional part <= 0.5 -> round down
 
-    Examples:
-      0.50 -> 0
-      0.51 -> 1
-      0.75 -> 1
-      1.33 -> 1
-      1.50 -> 1
-      1.67 -> 2
-      2.50 -> 2
-      2.51 -> 3
-    """
-    raw = row.get("QTY")
-
-    if raw is None or str(raw).strip() == "":
-        return 0
-
-    try:
-        value = float(str(raw).replace(",", "").strip())
-
-        if value <= 0:
-            return 0
-
-        whole = int(value)
-        fraction = value - whole
-
-        if fraction > 0.5:
-            return whole + 1
-
-        return whole
-
-    except (TypeError, ValueError):
-        return 0
-
+def normalise_row(row: dict) -> dict:
+    """Return both original and normalised keys so every source column remains available."""
+    result = dict(row)
+    for key, value in row.items():
+        result[normalise_header(key)] = value
+    return result
 
 
 def first_value(row, names):
-    """Return the first non-empty value from a list of possible CSV headings."""
+    """Return the first non-empty value from a list of possible headings."""
     for name in names:
-        value = row.get(name)
-        if value is not None and str(value).strip():
-            return str(value).strip()
+        candidates = (name, normalise_header(name))
+        for candidate in candidates:
+            value = row.get(candidate)
+            if value is not None and str(value).strip():
+                return str(value).strip()
     return ""
+
+
+def parse_number(value, fallback=None):
+    if value is None:
+        return fallback
+    text_value = str(value).strip().replace(",", "").replace("₹", "").replace("%", "")
+    if text_value == "":
+        return fallback
+    try:
+        return float(text_value)
+    except (TypeError, ValueError):
+        return fallback
+
+
+def parse_date(value):
+    """Parse common pharmacy invoice dates without inventing a date when ambiguous."""
+    if not value:
+        return None
+    value = str(value).strip()
+    formats = (
+        (r"^(\d{2})[-/](\d{2})[-/](\d{4})$", "%d-%m-%Y"),
+        (r"^(\d{4})[-/](\d{2})[-/](\d{2})$", "%Y-%m-%d"),
+        (r"^(\d{2})[-/](\d{2})[-/](\d{2})$", "%d-%m-%y"),
+    )
+    from datetime import datetime
+    for pattern, fmt in formats:
+        if re.match(pattern, value):
+            try:
+                return datetime.strptime(value.replace("/", "-"), fmt).date().isoformat()
+            except ValueError:
+                return None
+    return None
+
+
+def parse_expiry(row) -> str | None:
+    """Preserve the invoice expiry text exactly; also capture an optional parsed ISO date."""
+    value = first_value(row, (
+        "EXPIRY", "EXPIRY DATE", "EXP DATE", "EXP.DATE",
+        "EXP", "EXP.", "EXPIRYDATE"
+    ))
+    return value or None
+
+
+def parse_expiry_date(row):
+    raw = parse_expiry(row)
+    if raw:
+        parsed = parse_date(raw)
+        if parsed:
+            return parsed
+    raw_expdt = first_value(row, ("EXPDT", "EXP DT", "EXPIRYDT"))
+    if raw_expdt:
+        return parse_date(raw_expdt)
+    day = first_value(row, ("EXPDAY",))
+    month = first_value(row, ("EXPMONTH",))
+    year = first_value(row, ("EXPYEAR",))
+    if day and month and year:
+        try:
+            if len(year) == 2:
+                year = f"20{year}"
+            from datetime import date
+            return date(int(year), int(month), int(day)).isoformat()
+        except ValueError:
+            return None
+    return None
+
+
+
+def parse_quantity(row) -> int:
+    """Parse purchased QTY for stock movements without inventing units from free quantity."""
+    value = parse_number(first_value(row, ("QTY",)), 0) or 0
+    if value <= 0:
+        return 0
+    whole = int(value)
+    fraction = value - whole
+    return whole + 1 if fraction > 0.5 else whole
 
 
 def parse_batch_no(row) -> str:
@@ -509,24 +556,16 @@ def parse_batch_no(row) -> str:
     )).upper()
 
 
-def parse_expiry(row) -> str | None:
-    """
-    Preserve the invoice expiry text. This avoids guessing a date when an
-    exporter supplies MM/YY rather than a full date.
-    """
-    value = first_value(row, (
-        "EXPIRY", "EXPIRY DATE", "EXP DATE", "EXP.DATE",
-        "EXP", "EXP.", "EXPIRYDATE"
-    ))
-    return value or None
-
-
 def file_sha256(path: str) -> str:
     h = hashlib.sha256()
     with open(path, "rb") as f:
         for chunk in iter(lambda: f.read(1024 * 1024), b""):
             h.update(chunk)
     return h.hexdigest()
+
+
+def row_source_key(file_digest: str, row_number: int) -> str:
+    return hashlib.sha256(f"{file_digest}:{row_number}".encode("utf-8")).hexdigest()
 
 
 def load_processed_invoices() -> dict:
@@ -550,8 +589,7 @@ def save_processed_invoices(data: dict) -> None:
 def supabase_request(method: str, path: str, payload=None, prefer=None):
     if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
         raise RuntimeError(
-            "SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be configured "
-            "as GitHub Actions secrets/environment variables."
+            "SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be configured as GitHub Actions secrets/environment variables."
         )
 
     url = f"{SUPABASE_URL}/rest/v1/{path}"
@@ -563,18 +601,200 @@ def supabase_request(method: str, path: str, payload=None, prefer=None):
     if prefer:
         headers["Prefer"] = prefer
 
-    body = None if payload is None else json.dumps(payload).encode("utf-8")
+    body = None if payload is None else json.dumps(payload, ensure_ascii=False).encode("utf-8")
     req = request.Request(url, data=body, headers=headers, method=method)
 
     try:
-        with request.urlopen(req, timeout=30) as response:
+        with request.urlopen(req, timeout=60) as response:
             raw = response.read().decode("utf-8")
             return json.loads(raw) if raw else None
     except error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(
-            f"Supabase request failed ({exc.code}) {method} {path}: {detail}"
-        ) from exc
+        raise RuntimeError(f"Supabase request failed ({exc.code}) {method} {path}: {detail}") from exc
+
+
+def invoice_source_payload(row: dict, raw_row: dict, *, invoice_file: str, digest: str, row_number: int, source_row_key: str):
+    """Extract every known vendor invoice field plus the untouched raw row."""
+    supplier = first_value(row, ("SUPPLIER", "SUPPLIER NAME", "VENDOR", "VENDOR NAME"))
+    invoice_no = first_value(row, ("BILL NO.", "BILL NO", "INVOICE NO", "INVOICE NUMBER", "BILL NUMBER"))
+    invoice_date = first_value(row, ("DATE", "INVOICE DATE", "BILL DATE"))
+    company = first_value(row, ("COMPANY", "MANUFACTURER", "MFR", "COMP"))
+    item_code = first_value(row, ("CODE", "ITEM CODE", "PRODUCT CODE", "SKU"))
+    barcode = first_value(row, ("BARCODE", "EAN", "GTIN"))
+    item_name = first_value(row, ("ITEM NAME", "ITEM", "PRODUCT NAME", "MEDICINE NAME"))
+    pack = first_value(row, ("PACK", "PACKING", "PACK SIZE"))
+    batch = parse_batch_no(row)
+    expiry = parse_expiry(row)
+    qty = parse_number(first_value(row, ("QTY",)))
+    free_qty = parse_number(first_value(row, ("F.QTY", "FQTY", "FREE QTY", "FREE QUANTITY")))
+    halfp = parse_number(first_value(row, ("HALFP", "HALF P", "HALF PACK")))
+    ftrate = parse_number(first_value(row, ("FTRATE", "FT RATE", "F.T.RATE")))
+    srate = parse_number(first_value(row, ("SRATE", "SALE RATE", "SELLING RATE")))
+    mrp = parse_mrp(first_value(row, ("MRP", "MAX RETAIL PRICE")))
+    discount = parse_number(first_value(row, ("DIS", "DISC", "DISCOUNT", "DISCOUNT %")))
+    excise = parse_number(first_value(row, ("EXCISE",)))
+    vat = parse_number(first_value(row, ("VAT",)))
+    additional_vat = parse_number(first_value(row, ("ADNLVAT", "ADNL VAT", "ADDITIONAL VAT")))
+    line_amount = parse_number(first_value(row, ("AMOUNT", "LINE AMOUNT", "NET AMOUNT")))
+    local_cent = first_value(row, ("LOCALCENT", "LOCAL CENT")) or None
+    scm1 = parse_number(first_value(row, ("SCM1", "SCHEME1", "SCHEME 1")))
+    scm2 = parse_number(first_value(row, ("SCM2", "SCHEME2", "SCHEME 2")))
+    scmper = parse_number(first_value(row, ("SCMPER", "SCHEME %", "SCHEME PERCENT")))
+    custcode = first_value(row, ("CUSTCODE", "CUSTOMER CODE")) or None
+    invday = parse_number(first_value(row, ("INVDAY",)))
+    invmonth = parse_number(first_value(row, ("INVMONTH",)))
+    invyear = parse_number(first_value(row, ("INVYEAR",)))
+    expday = parse_number(first_value(row, ("EXPDAY",)))
+    expmonth = parse_number(first_value(row, ("EXPMONTH",)))
+    expyear = parse_number(first_value(row, ("EXPYEAR",)))
+    suppcode = first_value(row, ("SUPPCODE", "SUPPLIER CODE")) or None
+    invoice_amount = parse_number(first_value(row, ("INV.AMT", "INV AMT", "INVOICE AMOUNT", "BILL AMOUNT")))
+    cgst_rate = parse_number(first_value(row, ("CGST", "CGST %")))
+    sgst_rate = parse_number(first_value(row, ("SGST", "SGST %")))
+    igst_rate = parse_number(first_value(row, ("IGST", "IGST %")))
+    hsn_code = first_value(row, ("HSNCODE", "HSN CODE", "HSN")) or None
+    cgst_amount = parse_number(first_value(row, ("CGSTAMT", "CGST AMOUNT")))
+    sgst_amount = parse_number(first_value(row, ("SGSTAMT", "SGST AMOUNT")))
+    igst_amount = parse_number(first_value(row, ("IGSTAMT", "IGST AMOUNT")))
+    expdt = first_value(row, ("EXPDT", "EXP DT", "EXPIRY DT")) or None
+    custordno = first_value(row, ("CUSTORDNO", "CUSTOMER ORDER NO", "CUSTOMER ORDER NUMBER")) or None
+    psrlno = first_value(row, ("PSRLNO", "PURCHASE SERIAL NO", "PURCHASE SERIAL NUMBER")) or None
+    tcsper = parse_number(first_value(row, ("TCSPER", "TCS %")))
+    tcsamt = parse_number(first_value(row, ("TCSAMT", "TCS AMOUNT")))
+    supplier_gstin = first_value(row, ("SUPPLIER GSTIN", "SUPPLIER GSTIN/UIN", "GSTIN", "GSTIN/UIN", "VENDOR GSTIN")) or None
+    buyer_gstin = first_value(row, ("BUYER GSTIN", "CUSTOMER GSTIN", "RECIPIENT GSTIN")) or None
+    supplier_address = first_value(row, ("SUPPLIER ADDRESS", "VENDOR ADDRESS", "ADDRESS")) or None
+    supplier_state = first_value(row, ("SUPPLIER STATE", "VENDOR STATE")) or None
+    supplier_state_code = first_value(row, ("SUPPLIER STATE CODE", "VENDOR STATE CODE", "STATE CODE")) or None
+    buyer_address = first_value(row, ("BUYER ADDRESS", "CUSTOMER ADDRESS")) or None
+    buyer_state = first_value(row, ("BUYER STATE", "CUSTOMER STATE")) or None
+    buyer_state_code = first_value(row, ("BUYER STATE CODE", "CUSTOMER STATE CODE")) or None
+
+    gst_rate = None
+    if any(v is not None for v in (cgst_rate, sgst_rate, igst_rate)):
+        gst_rate = round(sum(v or 0 for v in (cgst_rate, sgst_rate, igst_rate)), 2)
+    gst_amount = None
+    if any(v is not None for v in (cgst_amount, sgst_amount, igst_amount)):
+        gst_amount = round(sum(v or 0 for v in (cgst_amount, sgst_amount, igst_amount)), 2)
+
+    purchase_date_iso = parse_date(invoice_date)
+    expiry_date_iso = parse_expiry_date(row)
+
+    return {
+        "source_row_key": source_row_key,
+        "file_sha256": digest,
+        "invoice_file": invoice_file,
+        "row_number": row_number,
+        "supplier_name": supplier or None,
+        "invoice_no": invoice_no or None,
+        "invoice_date": purchase_date_iso,
+        "supplier_gstin": supplier_gstin,
+        "supplier_address": supplier_address,
+        "supplier_state": supplier_state,
+        "supplier_state_code": supplier_state_code,
+        "buyer_gstin": buyer_gstin,
+        "buyer_address": buyer_address,
+        "buyer_state": buyer_state,
+        "buyer_state_code": buyer_state_code,
+        "company": company or None,
+        "item_code": item_code or None,
+        "barcode": barcode or None,
+        "item_name": item_name or None,
+        "medicine_id": medicine_key(clean_medicine_name(item_name)) if item_name else None,
+        "pack": pack or None,
+        "batch_no": batch or None,
+        "expiry": expiry,
+        "expiry_date": expiry_date_iso,
+        "qty": qty,
+        "free_qty": free_qty,
+        "half_pack": halfp,
+        "purchase_rate": ftrate,
+        "sale_rate": srate,
+        "discount": discount,
+        "mrp": mrp,
+        "net_rate": parse_purchase_rate(row),
+        "excise": excise,
+        "vat": vat,
+        "additional_vat": additional_vat,
+        "line_amount": line_amount,
+        "local_cent": local_cent,
+        "scheme1": scm1,
+        "scheme2": scm2,
+        "scheme_percent": scmper,
+        "customer_code": custcode,
+        "invoice_day": invday,
+        "invoice_month": invmonth,
+        "invoice_year": invyear,
+        "expiry_day": expday,
+        "expiry_month": expmonth,
+        "expiry_year": expyear,
+        "supplier_code": suppcode,
+        "invoice_amount": invoice_amount,
+        "cgst_rate": cgst_rate,
+        "sgst_rate": sgst_rate,
+        "igst_rate": igst_rate,
+        "gst_rate": gst_rate,
+        "hsn_code": hsn_code,
+        "cgst_amount": cgst_amount,
+        "sgst_amount": sgst_amount,
+        "igst_amount": igst_amount,
+        "gst_amount": gst_amount,
+        "expiry_display": expdt,
+        "customer_order_no": custordno,
+        "purchase_serial_no": psrlno,
+        "tcs_percent": tcsper,
+        "tcs_amount": tcsamt,
+        "raw_row": {str(k): (None if v is None else str(v)) for k, v in raw_row.items() if k is not None},
+    }
+
+
+def upsert_purchase_lines(payloads: list[dict]) -> dict[str, dict]:
+    """Upsert source invoice rows in batches and return source_row_key -> stored row."""
+    if not payloads:
+        return {}
+    result_by_key: dict[str, dict] = {}
+    for start in range(0, len(payloads), 100):
+        chunk = payloads[start:start + 100]
+        result = supabase_request(
+            "POST",
+            "purchase_invoice_lines?on_conflict=source_row_key",
+            chunk,
+            "resolution=merge-duplicates,return=representation",
+        )
+        for item in result or []:
+            key = item.get("source_row_key")
+            if key:
+                result_by_key[key] = item
+    missing = [p["source_row_key"] for p in payloads if p["source_row_key"] not in result_by_key]
+    if missing:
+        raise RuntimeError(f"Purchase invoice metadata upsert did not return {len(missing)} row(s).")
+    return result_by_key
+
+
+def sync_purchase_invoice_metadata(source_row_keys: list[str]) -> int:
+    """Attach previously captured purchase-line metadata to matching inventory batches.
+
+    This is deliberately separate from stock application so re-scanning an invoice
+    can backfill HSN/GST/pack/company/etc. without ever adding stock twice.
+    """
+    keys = [str(k) for k in source_row_keys if k]
+    if not keys:
+        return 0
+
+    updated = 0
+    for start in range(0, len(keys), 200):
+        chunk = keys[start:start + 200]
+        result = supabase_request(
+            "POST",
+            "rpc/sync_purchase_invoice_metadata",
+            {"p_source_row_keys": chunk},
+            "return=representation",
+        )
+        if isinstance(result, list):
+            result = result[0] if result else {}
+        if isinstance(result, dict):
+            updated += int(result.get("updated_batches") or 0)
+    return updated
 
 
 def apply_invoice_purchase(
@@ -586,20 +806,9 @@ def apply_invoice_purchase(
     purchase_price: float | None,
     reference_id: str,
     source_key: str,
+    source_metadata: dict | None = None,
 ):
-    """
-    Apply one invoice purchase atomically through Supabase.
-
-    The database function:
-      - locks the invoice line/batch
-      - detects an already-applied source_key
-      - updates/creates the batch first
-      - derives inventory.quantity from SUM(inventory_batches.quantity)
-      - writes an audit movement using the live schema
-
-    This prevents the inventory/batch quantity mismatch that caused the GitHub
-    Actions failure and makes retries safe after a partially completed run.
-    """
+    """Apply stock and atomically attach the captured purchase-invoice metadata to the batch."""
     if quantity <= 0:
         return {"status": "skipped", "reason": "non_positive_quantity"}
     if not batch_no:
@@ -607,12 +816,11 @@ def apply_invoice_purchase(
     if not source_key:
         raise RuntimeError(f"Missing source key for {name}")
 
-    medicine_id = medicine_key(name)
     result = supabase_request(
         "POST",
-        "rpc/apply_invoice_purchase",
+        "rpc/apply_invoice_purchase_with_metadata",
         {
-            "p_medicine_id": medicine_id,
+            "p_medicine_id": medicine_key(name),
             "p_medicine_name": name,
             "p_batch_no": batch_no,
             "p_expiry": expiry or "",
@@ -621,25 +829,18 @@ def apply_invoice_purchase(
             "p_quantity": quantity,
             "p_reference": reference_id,
             "p_source_key": source_key,
+            "p_metadata": source_metadata or {},
         },
         "return=representation",
     )
 
-    # PostgREST returns a JSON object for a scalar jsonb function.
     if isinstance(result, list):
         result = result[0] if result else None
-
     if not isinstance(result, dict):
-        raise RuntimeError(
-            f"Unexpected response from apply_invoice_purchase for {name}: {result!r}"
-        )
-
+        raise RuntimeError(f"Unexpected response for {name}: {result!r}")
     status = result.get("status")
     if status not in {"applied", "reconciled", "skipped"}:
-        raise RuntimeError(
-            f"Unexpected apply_invoice_purchase status for {name}: {result!r}"
-        )
-
+        raise RuntimeError(f"Unexpected invoice purchase status for {name}: {result!r}")
     return result
 
 
@@ -650,7 +851,6 @@ with open(MEDICINES_PATH, "r", encoding="utf-8") as f:
 existing_names = re.findall(r'name:\s*"([^"]+)"', js)
 existing_normalized = {normalize_for_dedup(x) for x in existing_names}
 
-# ── Read CSVs ─────────────────────────────────────────────────────────────────
 csv_files = [f for f in glob.glob("invoices/*") if f.lower().endswith(".csv")]
 if not csv_files:
     print("No CSV files found in invoices/. Nothing to do.")
@@ -660,80 +860,99 @@ print(f"Found {len(csv_files)} invoice file(s).")
 
 processed_invoices = load_processed_invoices()
 new_by_cat: dict[str, list] = {}
+metadata_rows: list[dict] = []
 inventory_updates: list[dict] = []
 newly_processed: dict[str, dict] = {}
 
 for csv_path in sorted(csv_files):
     digest = file_sha256(csv_path)
-    reference_id = f"{os.path.basename(csv_path)}:{digest[:12]}"
+    invoice_file = os.path.basename(csv_path)
+    reference_id = f"{invoice_file}:{digest[:12]}"
+    stock_already_processed = digest in processed_invoices
 
-    # Content hash prevents the same invoice file from adding stock twice,
-    # even when the workflow is manually rerun.
-    if digest in processed_invoices:
-        print(f"\nSKIP invoice already processed for stock: {csv_path}")
-        continue
+    if stock_already_processed:
+        print(f"\nMetadata re-scan (stock already processed): {csv_path}")
+    else:
+        print(f"\nProcessing: {csv_path}")
 
-    print(f"\nProcessing: {csv_path}")
     rows_seen = 0
     qty_seen = 0
 
     with open(csv_path, newline="", encoding="utf-8-sig") as f:
         reader = csv.DictReader(f)
-        for row in reader:
-            raw_name = (row.get("ITEM NAME") or "").strip()
-            mrp = parse_mrp(row.get("MRP"))
-            purchase_price = parse_purchase_rate(row)
-            if not raw_name or mrp is None:
-                continue
-            if raw_name.upper() in ("FREE GIFT", "FREE", "N/A"):
+        for row_number, raw_row in enumerate(reader, start=2):
+            if not raw_row or not any(str(v or "").strip() for v in raw_row.values()):
                 continue
 
+            row = normalise_row(raw_row)
+            raw_name = first_value(row, ("ITEM NAME", "ITEM", "PRODUCT NAME", "MEDICINE NAME"))
+
+            source_row_key = row_source_key(digest, row_number)
+            source = invoice_source_payload(
+                row,
+                raw_row,
+                invoice_file=invoice_file,
+                digest=digest,
+                row_number=row_number,
+                source_row_key=source_row_key,
+            )
+            metadata_rows.append(source)
             rows_seen += 1
+
+            mrp = parse_mrp(first_value(row, ("MRP", "MAX RETAIL PRICE")))
+            if not raw_name:
+                continue
+
             name = clean_medicine_name(raw_name)
             norm = normalize_for_dedup(name)
 
-            # CATALOG: only add medicines that do not already exist.
-            if norm not in existing_normalized:
-                cat = categorise(name)
-                new_by_cat.setdefault(cat, [])
-                if not any(normalize_for_dedup(i["name"]) == norm for i in new_by_cat[cat]):
-                    new_by_cat[cat].append({"name": name, "mrp": mrp})
-                    existing_normalized.add(norm)
-                    print(f"  NEW [{cat}]: {name}  ₹{mrp}")
-            else:
-                print(f"  CATALOG EXISTS: {name}")
+            # Catalog only gets a medicine when a trustworthy MRP is present.
+            if mrp is not None:
+                if norm not in existing_normalized:
+                    cat = categorise(name)
+                    new_by_cat.setdefault(cat, [])
+                    if not any(normalize_for_dedup(i["name"]) == norm for i in new_by_cat[cat]):
+                        new_by_cat[cat].append({"name": name, "mrp": mrp})
+                        existing_normalized.add(norm)
+                        print(f"  NEW [{cat}]: {name}  ₹{mrp}")
+                else:
+                    print(f"  CATALOG EXISTS: {name}")
 
-            # INVENTORY: every invoice line is eligible, including existing meds.
+            # Stock is never re-applied to an already processed file, but metadata is.
+            if stock_already_processed:
+                continue
+
             qty = parse_quantity(row)
             batch_no = parse_batch_no(row)
             expiry = parse_expiry(row)
-
             if qty > 0:
                 if not batch_no:
-                    raise RuntimeError(
-                        f"Invoice row for {name} has QTY {qty} but no Batch No."
-                    )
-
+                    raise RuntimeError(f"Invoice row for {name} has QTY {qty} but no Batch No.")
+                if mrp is None:
+                    print(f"  WARNING: stock not applied for {name} because MRP is missing/invalid")
+                    continue
                 inventory_updates.append({
-    "name": name,
-    "quantity": qty,
-    "batch_no": batch_no,
-    "expiry": expiry,
-    "mrp": mrp,
-    "purchase_price": purchase_price,
-    "reference_id": reference_id,
-    "invoice_digest": digest,
-})
+                    "name": name,
+                    "quantity": qty,
+                    "batch_no": batch_no,
+                    "expiry": expiry,
+                    "mrp": mrp,
+                    "purchase_price": parse_purchase_rate(row),
+                    "reference_id": reference_id,
+                    "invoice_digest": digest,
+                    "source_row_key": source_row_key,
+                })
                 qty_seen += qty
             else:
                 print(f"  WARNING: no usable quantity for {name}")
 
-    newly_processed[digest] = {
-        "file": os.path.basename(csv_path),
-        "reference_id": reference_id,
-        "rows": rows_seen,
-        "units": qty_seen,
-    }
+    if not stock_already_processed:
+        newly_processed[digest] = {
+            "file": invoice_file,
+            "reference_id": reference_id,
+            "rows": rows_seen,
+            "units": qty_seen,
+        }
 
 # ── Insert new medicines into medicines.js ────────────────────────────────────
 updated_js = js
@@ -778,9 +997,20 @@ if updated_js != js:
     with open(MEDICINES_PATH, "w", encoding="utf-8") as f:
         f.write(updated_js)
 
+# ── Persist complete purchase-invoice metadata before inventory changes ────────
+if metadata_rows:
+    metadata_index = upsert_purchase_lines(metadata_rows)
+    print(f"✓ Captured {len(metadata_index)} purchase invoice line(s) with full raw metadata")
+    try:
+        attached_before_stock = sync_purchase_invoice_metadata(list(metadata_index.keys()))
+        print(f"✓ Backfilled metadata onto {attached_before_stock} existing inventory batch(es)")
+    except Exception as exc:
+        print(f"\nERROR: Could not backfill purchase metadata onto existing batches: {exc}")
+        raise SystemExit(1)
+else:
+    metadata_index = {}
+
 # ── Apply invoice quantities to Supabase ──────────────────────────────────────
-# Aggregate duplicate medicine rows inside the same invoice/reference before
-# touching Supabase.
 aggregated: dict[tuple[str, str, str, str], dict] = {}
 for item in inventory_updates:
     key = (
@@ -798,49 +1028,41 @@ inventory_ok = True
 
 if aggregated:
     if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
-        print(
-            "\nERROR: invoice quantities were found, but Supabase credentials "
-            "are missing. Stock was NOT marked as processed."
-        )
+        print("\nERROR: invoice quantities were found, but Supabase credentials are missing. Stock was NOT marked as processed.")
         inventory_ok = False
     else:
         try:
             for item in aggregated.values():
-                source_key = "|".join(
-                    [
-                        item["reference_id"],
-                        medicine_key(item["name"]),
-                        item["batch_no"],
-                        item["expiry"] or "",
-                    ]
-                )
-
-                result = apply_invoice_purchase(
-                    item["name"],
-                    item["quantity"],
-                    item["batch_no"],
-                    item["expiry"],
-                    item["mrp"],
-                    item["purchase_price"],
+                source_key = "|".join([
                     item["reference_id"],
-                    source_key,
+                    medicine_key(item["name"]),
+                    item["batch_no"],
+                    item["expiry"] or "",
+                ])
+                metadata = metadata_index.get(item.get("source_row_key")) or {}
+                result = apply_invoice_purchase(
+                    item["name"], item["quantity"], item["batch_no"], item["expiry"],
+                    item["mrp"], item["purchase_price"], item["reference_id"], source_key,
+                    metadata,
                 )
-
                 if result.get("status") == "skipped":
                     print(f"  SKIP stock already applied: {source_key}")
                 else:
-                    print(
-                        f"  ✓ STOCK APPLIED: {item['name']} | "
-                        f"{item['batch_no']} | +{item['quantity']}"
-                    )
+                    print(f"  ✓ STOCK + METADATA APPLIED: {item['name']} | {item['batch_no']} | +{item['quantity']}")
         except Exception as exc:
             inventory_ok = False
             print(f"\nERROR: Supabase inventory update failed: {exc}")
 else:
-    print("\nNo positive invoice quantities found; no Supabase stock changes required.")
+    print("\nNo new invoice quantities to apply; purchase metadata was still captured.")
 
-# Only mark invoices processed after every intended inventory update succeeds.
 if inventory_ok:
+    if metadata_index:
+        try:
+            attached_after_stock = sync_purchase_invoice_metadata(list(metadata_index.keys()))
+            print(f"✓ Final metadata sync attached data to {attached_after_stock} batch(es)")
+        except Exception as exc:
+            print(f"\nERROR: Final purchase metadata sync failed: {exc}")
+            raise SystemExit(1)
     processed_invoices.update(newly_processed)
     save_processed_invoices(processed_invoices)
 else:
@@ -848,5 +1070,6 @@ else:
 
 print(
     f"\n✅ Done — {total_added} new medicine(s) added to catalog; "
+    f"{len(metadata_rows)} purchase invoice line(s) captured; "
     f"{len(aggregated)} inventory purchase update(s) applied."
 )
