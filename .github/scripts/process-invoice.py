@@ -982,7 +982,7 @@ for csv_path in sorted(csv_files):
             else:
                 print(f"  WARNING: no usable quantity for {name}")
 
-    if not stock_already_processed:
+    if not stock_already_processed and digest not in newly_processed:
         newly_processed[digest] = {
             "file": invoice_file,
             "reference_id": reference_id,
