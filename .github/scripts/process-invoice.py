@@ -752,7 +752,29 @@ def upsert_purchase_lines(payloads: list[dict]) -> dict[str, dict]:
     """Upsert source invoice rows in batches and return source_row_key -> stored row."""
     if not payloads:
         return {}
+
+    # A duplicate invoice file can produce the same source_row_key more than
+    # once in metadata_rows. PostgreSQL ON CONFLICT DO UPDATE cannot process
+    # duplicate conflict keys in the same INSERT statement.
+    unique_payloads: dict[str, dict] = {}
+
+    for payload in payloads:
+        key = str(payload.get("source_row_key") or "").strip()
+
+        if not key:
+            raise RuntimeError(
+                "Purchase invoice metadata row is missing source_row_key."
+            )
+
+        if key in unique_payloads:
+            continue
+
+        unique_payloads[key] = payload
+
+    payloads = list(unique_payloads.values())
+
     result_by_key: dict[str, dict] = {}
+
     for start in range(0, len(payloads), 100):
         chunk = payloads[start:start + 100]
         result = supabase_request(
