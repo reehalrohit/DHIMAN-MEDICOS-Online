@@ -885,14 +885,28 @@ new_by_cat: dict[str, list] = {}
 metadata_rows: list[dict] = []
 inventory_updates: list[dict] = []
 newly_processed: dict[str, dict] = {}
+seen_invoice_digests: set[str] = set()
 
 for csv_path in sorted(csv_files):
     digest = file_sha256(csv_path)
     invoice_file = os.path.basename(csv_path)
     reference_id = f"{invoice_file}:{digest[:12]}"
-    stock_already_processed = digest in processed_invoices
 
-    if stock_already_processed:
+    # A byte-identical invoice can appear under multiple filenames in one run.
+    # Metadata rows intentionally share the same deterministic source_row_key,
+    # but stock must be applied only once for that invoice content.
+    duplicate_invoice_content = digest in seen_invoice_digests
+    stock_already_processed = (
+        digest in processed_invoices or duplicate_invoice_content
+    )
+    seen_invoice_digests.add(digest)
+
+    if duplicate_invoice_content:
+        print(
+            f"\nDuplicate invoice content (metadata-only): {csv_path} | "
+            "same SHA-256 already seen in this run"
+        )
+    elif digest in processed_invoices:
         print(f"\nMetadata re-scan (stock already processed): {csv_path}")
     else:
         print(f"\nProcessing: {csv_path}")
