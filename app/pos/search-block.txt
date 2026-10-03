@@ -1,0 +1,70 @@
+Add these state variables near the other useState calls:
+
+const [searchResults, setSearchResults] = useState([]);
+const [searching, setSearching] = useState(false);
+
+Add this effect after the existing loadData/useEffect:
+
+useEffect(() => {
+  const query = search.trim();
+
+  if (!query) {
+    setSearchResults([]);
+    setSearching(false);
+    return;
+  }
+
+  let cancelled = false;
+
+  async function searchServer() {
+    try {
+      setSearching(true);
+
+      const response = await fetch(
+        `/api/pos/inventory?q=${encodeURIComponent(query)}`,
+        { cache: "no-store" }
+      );
+
+      const result = await response.json();
+
+      if (!response.ok || !result.success) {
+        throw new Error(result.error || "Medicine search failed");
+      }
+
+      if (cancelled) return;
+
+      setBatches((current) => {
+        const incoming = result.batches || [];
+        const byKey = new Map(
+          current.map((batch) => [String(batch.id), batch])
+        );
+
+        for (const batch of incoming) {
+          byKey.set(String(batch.id), batch);
+        }
+
+        return Array.from(byKey.values());
+      });
+
+      setSearchResults(result.inventory || []);
+    } catch (error) {
+      if (!cancelled) {
+        console.error("POS search error:", error);
+        setSearchResults([]);
+      }
+    } finally {
+      if (!cancelled) setSearching(false);
+    }
+  }
+
+  const timer = setTimeout(searchServer, 120);
+
+  return () => {
+    cancelled = true;
+    clearTimeout(timer);
+  };
+}, [search]);
+
+Replace the old searchableInventory + filteredInventory blocks with:
+
+const filteredInventory = searchResults.slice(0, 20);
