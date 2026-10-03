@@ -11,18 +11,40 @@ function getAdminClient() {
   );
 }
 
-export async function GET() {
+function parseBatchExpiry(value) {
+  if (!value) return null;
+  const text = String(value).trim();
+  let m = text.match(/^(\d{2})-(\d{2})-(\d{2})$/);
+  if (m) {
+    const [, dd, mm, yy] = m;
+    return new Date(Number(`20${yy}`), Number(mm) - 1, Number(dd));
+  }
+  m = text.match(/^(\d{2})-(\d{2})-(\d{4})$/);
+  if (m) {
+    const [, dd, mm, yyyy] = m;
+    return new Date(Number(yyyy), Number(mm) - 1, Number(dd));
+  }
+  m = text.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (m) {
+    const [, yyyy, mm, dd] = m;
+    return new Date(Number(yyyy), Number(mm) - 1, Number(dd));
+  }
+  return null;
+}
+
+function normalize(value) {
+  return String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+}
+
+export async function GET(request) {
   try {
     const supabase = getAdminClient();
 
     const [inventoryResult, batchesResult] = await Promise.all([
-      supabase
-        .from("inventory")
+      supabase.from("inventory")
         .select("id, medicine_id, medicine_name, mrp, selling_price, quantity, status")
-        .gt("quantity", 0)
-        .order("medicine_name"),
-      supabase
-        .from("inventory_batches")
+        .gt("quantity", 0).order("medicine_name"),
+      supabase.from("inventory_batches")
         .select("id, medicine_id, medicine_name, batch_no, expiry, mrp, quantity")
         .gt("quantity", 0),
     ]);
@@ -33,98 +55,86 @@ export async function GET() {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
-    function parseBatchExpiry(value) {
-      if (!value) return null;
-      const text = String(value).trim();
-      let match = text.match(/^(\d{2})-(\d{2})-(\d{2})$/);
-      if (match) {
-        const [, dd, mm, yy] = match;
-        return new Date(Number(`20${yy}`), Number(mm) - 1, Number(dd));
-      }
-      match = text.match(/^(\d{2})-(\d{2})-(\d{4})$/);
-      if (match) {
-        const [, dd, mm, yyyy] = match;
-        return new Date(Number(yyyy), Number(mm) - 1, Number(dd));
-      }
-      match = text.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-      if (match) {
-        const [, yyyy, mm, dd] = match;
-        return new Date(Number(yyyy), Number(mm) - 1, Number(dd));
-      }
-      return null;
-    }
-
     const sellableBatches = (batchesResult.data || []).filter((batch) => {
       const expiry = parseBatchExpiry(batch.expiry);
       return !expiry || expiry >= today;
     });
 
-    // Only expose medicines that have at least one positive, non-expired batch.
-    // This prevents expired-only stock from appearing at the POS.
     const inventoryByMedicineId = new Map(
-  (inventoryResult.data || []).map((item) => [
-    String(item.medicine_id),
-    item,
-  ])
-);
-
-const batchGroups = new Map();
-
-for (const batch of sellableBatches) {
-  const medicineId = String(batch.medicine_id);
-
-  if (!batchGroups.has(medicineId)) {
-    batchGroups.set(medicineId, []);
-  }
-
-  batchGroups.get(medicineId).push(batch);
-}
-
-const sellableInventory = Array.from(batchGroups.entries())
-  .map(([medicineId, medicineBatches]) => {
-    const existing = inventoryByMedicineId.get(medicineId);
-
-    const batchQuantity = medicineBatches.reduce(
-      (sum, batch) => sum + Number(batch.quantity || 0),
-      0
+      (inventoryResult.data || []).map((item) => [String(item.medicine_id), item])
     );
 
-    if (existing) {
-      return {
-        ...existing,
-        quantity:
-          Number(existing.quantity || 0) > 0
-            ? existing.quantity
-            : batchQuantity,
-      };
+    const batchGroups = new Map();
+    for (const batch of sellableBatches) {
+      const id = String(batch.medicine_id);
+      if (!batchGroups.has(id)) batchGroups.set(id, []);
+      batchGroups.get(id).push(batch);
     }
 
-    const firstBatch = medicineBatches[0];
+    const sellableInventory = Array.from(batchGroups.entries())
+      .map(([medicineId, medicineBatches]) => {
+        const existing = inventoryByMedicineId.get(medicineId);
+        const batchQuantity = medicineBatches.reduce(
+          (sum, batch) => sum + Number(batch.quantity || 0), 0
+        );
 
-    return {
-      id: `batch-${medicineId}`,
-      medicine_id: medicineId,
-      medicine_name:
-        firstBatch?.medicine_name || medicineId,
-      mrp: Number(firstBatch?.mrp || 0),
-      selling_price: 0,
-      quantity: batchQuantity,
-      status: "In Stock",
-    };
-  })
-  .sort((a, b) =>
-    String(a.medicine_name || "").localeCompare(
-      String(b.medicine_name || "")
-    )
-  );
+        if (existing) {
+          return {
+            ...existing,
+            quantity: Number(existing.quantity || 0) > 0
+              ? existing.quantity
+              : batchQuantity,
+          };
+        }
 
-    return NextResponse.json({
-      success: true,
-      inventory: sellableInventory,
-      batches: sellableBatches,
-    }, { headers: { "Cache-Control": "no-store, max-age=0" } });
+        const first = medicineBatches[0];
+        return {
+          id: `batch-${medicineId}`,
+          medicine_id: medicineId,
+          medicine_name: first?.medicine_name || medicineId,
+          mrp: Number(first?.mrp || 0),
+          selling_price: 0,
+          quantity: batchQuantity,
+          status: "In Stock",
+        };
+      })
+      .sort((a, b) =>
+        String(a.medicine_name || "").localeCompare(String(b.medicine_name || ""))
+      );
+
+    const query = new URL(request.url).searchParams.get("q")?.trim().toLowerCase() || "";
+    let responseInventory = sellableInventory;
+    let responseBatches = sellableBatches;
+
+    if (query) {
+      const normalizedQuery = normalize(query);
+      const matchingIds = new Set(
+        sellableInventory.filter((item) => {
+          const name = String(item.medicine_name || "").toLowerCase();
+          const id = String(item.medicine_id || "").toLowerCase();
+          return name.includes(query) || id.includes(query) ||
+            normalize(name).includes(normalizedQuery) ||
+            normalize(id).includes(normalizedQuery);
+        }).map((item) => String(item.medicine_id))
+      );
+
+      responseInventory = sellableInventory.filter((item) =>
+        matchingIds.has(String(item.medicine_id))
+      );
+      responseBatches = sellableBatches.filter((batch) =>
+        matchingIds.has(String(batch.medicine_id))
+      );
+    }
+
+    return NextResponse.json(
+      { success: true, inventory: responseInventory, batches: responseBatches },
+      { headers: { "Cache-Control": "no-store, max-age=0" } }
+    );
   } catch (error) {
     console.error("POS inventory API error:", error);
-    return NextResponse.json({ success: false, error: error?.message || "Failed to load POS inventory" }, { status: 500 });
+    return NextResponse.json(
+      { success: false, error: error?.message || "Failed to load POS inventory" },
+      { status: 500 }
+    );
   }
 }
