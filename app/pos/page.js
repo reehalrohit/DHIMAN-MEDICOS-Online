@@ -125,16 +125,83 @@ export default function POSPage() {
     );
   }
 
+    const searchableInventory = useMemo(() => {
+    // Inventory is the aggregate view. Batches are the source of truth
+    // for medicines that can actually be sold.
+    const byMedicineId = new Map();
+
+    // Keep normal inventory records.
+    for (const item of inventory) {
+      byMedicineId.set(String(item.medicine_id), item);
+    }
+
+    // Add medicines that have valid sellable batches but are missing
+    // from the aggregate inventory response.
+    const batchGroups = new Map();
+
+    for (const batch of batches) {
+      if (Number(batch.quantity || 0) <= 0) continue;
+      if (isExpired(batch.expiry)) continue;
+
+      const medicineId = String(batch.medicine_id);
+
+      if (!batchGroups.has(medicineId)) {
+        batchGroups.set(medicineId, []);
+      }
+
+      batchGroups.get(medicineId).push(batch);
+    }
+
+    for (const [medicineId, medicineBatches] of batchGroups) {
+      if (byMedicineId.has(medicineId)) continue;
+
+      const first = medicineBatches[0];
+
+      byMedicineId.set(medicineId, {
+        id: `batch-${medicineId}`,
+        medicine_id: medicineId,
+        medicine_name: first?.medicine_name || medicineId,
+        mrp: Number(first?.mrp || 0),
+        selling_price: Number(first?.mrp || 0),
+        quantity: medicineBatches.reduce(
+          (sum, batch) => sum + Number(batch.quantity || 0),
+          0
+        ),
+        status: "In Stock",
+      });
+    }
+
+    return Array.from(byMedicineId.values());
+  }, [inventory, batches]);
+
   const filteredInventory = useMemo(() => {
     const query = search.trim().toLowerCase();
+
     if (!query) return [];
 
-    return inventory.filter((item) => {
-      const name = String(item.medicine_name || "").toLowerCase();
-      const id = String(item.medicine_id || "").toLowerCase();
-      return name.includes(query) || id.includes(query);
-    }).slice(0, 20);
-  }, [inventory, search]);
+    // Allows searches such as:
+    // Ticap -> TICAPRIDE
+    // Ticapride 90 -> TICAPRIDE90
+    // Ticap-90 -> TICAPRIDE90
+    const compactQuery = query.replace(/[\s-]+/g, "");
+
+    return searchableInventory
+      .filter((item) => {
+        const name = String(item.medicine_name || "").toLowerCase();
+        const id = String(item.medicine_id || "").toLowerCase();
+
+        const compactName = name.replace(/[\s-]+/g, "");
+        const compactId = id.replace(/[\s-]+/g, "");
+
+        return (
+          name.includes(query) ||
+          id.includes(query) ||
+          compactName.includes(compactQuery) ||
+          compactId.includes(compactQuery)
+        );
+      })
+      .slice(0, 20);
+  }, [searchableInventory, search]);
 
   function addMedicine(medicine) {
     setMessage("");
