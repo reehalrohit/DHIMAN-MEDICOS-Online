@@ -125,25 +125,30 @@ export default function POSPage() {
     );
   }
 
-    const searchableInventory = useMemo(() => {
-    // Inventory is the aggregate view. Batches are the source of truth
-    // for medicines that can actually be sold.
+      const searchableInventory = useMemo(() => {
+    // Build the POS search index from BOTH aggregate inventory and
+    // sellable batches. Batch data is authoritative for what can actually
+    // be sold and also carries the canonical medicine name.
     const byMedicineId = new Map();
 
-    // Keep normal inventory records.
     for (const item of inventory) {
-      byMedicineId.set(String(item.medicine_id), item);
+      const medicineId = String(item.medicine_id || "").trim();
+      if (!medicineId) continue;
+
+      byMedicineId.set(medicineId, {
+        ...item,
+        medicine_id: medicineId,
+      });
     }
 
-    // Add medicines that have valid sellable batches but are missing
-    // from the aggregate inventory response.
     const batchGroups = new Map();
 
     for (const batch of batches) {
       if (Number(batch.quantity || 0) <= 0) continue;
       if (isExpired(batch.expiry)) continue;
 
-      const medicineId = String(batch.medicine_id);
+      const medicineId = String(batch.medicine_id || "").trim();
+      if (!medicineId) continue;
 
       if (!batchGroups.has(medicineId)) {
         batchGroups.set(medicineId, []);
@@ -152,21 +157,31 @@ export default function POSPage() {
       batchGroups.get(medicineId).push(batch);
     }
 
+    // Always merge valid batches into the search index.
     for (const [medicineId, medicineBatches] of batchGroups) {
-      if (byMedicineId.has(medicineId)) continue;
+      const firstBatch = medicineBatches[0];
+      const existing = byMedicineId.get(medicineId);
 
-      const first = medicineBatches[0];
+      const batchQuantity = medicineBatches.reduce(
+        (sum, batch) => sum + Number(batch.quantity || 0),
+        0
+      );
 
       byMedicineId.set(medicineId, {
-        id: `batch-${medicineId}`,
+        ...(existing || {}),
+        id: existing?.id || `batch-${medicineId}`,
         medicine_id: medicineId,
-        medicine_name: first?.medicine_name || medicineId,
-        mrp: Number(first?.mrp || 0),
-        selling_price: Number(first?.mrp || 0),
-        quantity: medicineBatches.reduce(
-          (sum, batch) => sum + Number(batch.quantity || 0),
-          0
+        medicine_name:
+          firstBatch?.medicine_name ||
+          existing?.medicine_name ||
+          medicineId,
+        mrp: Number(
+          existing?.mrp || firstBatch?.mrp || 0
         ),
+        selling_price: Number(
+          existing?.selling_price || firstBatch?.mrp || 0
+        ),
+        quantity: batchQuantity,
         status: "In Stock",
       });
     }
@@ -176,28 +191,26 @@ export default function POSPage() {
 
   const filteredInventory = useMemo(() => {
     const query = search.trim().toLowerCase();
-
     if (!query) return [];
 
-    // Allows searches such as:
-    // Ticap -> TICAPRIDE
-    // Ticapride 90 -> TICAPRIDE90
-    // Ticap-90 -> TICAPRIDE90
-    const compactQuery = query.replace(/[\s-]+/g, "");
+    // Normalize punctuation and spacing.
+    const normalizeSearch = (value) =>
+      String(value || "")
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "");
+
+    const normalizedQuery = normalizeSearch(query);
 
     return searchableInventory
       .filter((item) => {
         const name = String(item.medicine_name || "").toLowerCase();
         const id = String(item.medicine_id || "").toLowerCase();
 
-        const compactName = name.replace(/[\s-]+/g, "");
-        const compactId = id.replace(/[\s-]+/g, "");
-
         return (
           name.includes(query) ||
           id.includes(query) ||
-          compactName.includes(compactQuery) ||
-          compactId.includes(compactQuery)
+          normalizeSearch(name).includes(normalizedQuery) ||
+          normalizeSearch(id).includes(normalizedQuery)
         );
       })
       .slice(0, 20);
