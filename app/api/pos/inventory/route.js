@@ -61,13 +61,62 @@ export async function GET() {
 
     // Only expose medicines that have at least one positive, non-expired batch.
     // This prevents expired-only stock from appearing at the POS.
-    const sellableMedicineIds = new Set(
-      sellableBatches.map((batch) => String(batch.medicine_id))
+    const inventoryByMedicineId = new Map(
+  (inventoryResult.data || []).map((item) => [
+    String(item.medicine_id),
+    item,
+  ])
+);
+
+const batchGroups = new Map();
+
+for (const batch of sellableBatches) {
+  const medicineId = String(batch.medicine_id);
+
+  if (!batchGroups.has(medicineId)) {
+    batchGroups.set(medicineId, []);
+  }
+
+  batchGroups.get(medicineId).push(batch);
+}
+
+const sellableInventory = Array.from(batchGroups.entries())
+  .map(([medicineId, medicineBatches]) => {
+    const existing = inventoryByMedicineId.get(medicineId);
+
+    const batchQuantity = medicineBatches.reduce(
+      (sum, batch) => sum + Number(batch.quantity || 0),
+      0
     );
 
-    const sellableInventory = (inventoryResult.data || []).filter((item) =>
-      sellableMedicineIds.has(String(item.medicine_id))
-    );
+    if (existing) {
+      return {
+        ...existing,
+        quantity:
+          Number(existing.quantity || 0) > 0
+            ? existing.quantity
+            : batchQuantity,
+      };
+    }
+
+    const firstBatch = medicineBatches[0];
+
+    return {
+      id: `batch-${medicineId}`,
+      medicine_id: medicineId,
+      medicine_name:
+        firstBatch?.medicine_name || medicineId,
+      mrp: Number(firstBatch?.mrp || 0),
+      selling_price: 0,
+      quantity: batchQuantity,
+      status: "In Stock",
+    };
+  })
+  .sort((a, b) =>
+    String(a.medicine_name || "").localeCompare(
+      String(b.medicine_name || "")
+    )
+  );
 
     return NextResponse.json({
       success: true,
